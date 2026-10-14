@@ -29,6 +29,7 @@ func main() {
 	token := flag.String("token", "testtoken", "the token the harness calls with")
 	refused := flag.Bool("refused", false, "show the banner of a look Telegram refused")
 	noUsers := flag.Bool("no-users-all", false, "the addon lacks the permission users:all")
+	flag.BoolVar(&notHolder, "not-holder", false, "the bot is another addon's")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	kv, kvSrv := plustest.NewKV("p")
@@ -103,6 +104,8 @@ func main() {
 		log.Error("serve", "err", err)
 	}
 }
+
+var notHolder bool
 
 // demoBot stands in for the bot's broadcasts: a job "sends" ten messages a second.
 type demoBot struct {
@@ -186,3 +189,6 @@ func (b *demoBot) TestMessage(ctx context.Context, chat int64, m plus.Message) e
 	b.log.Info("test message", "chat", chat, "text", m.Text)
 	return nil
 }
+
+// Holds: the demo's bot is the addon's unless -not-holder.
+func (b *demoBot) Holds(context.Context) bool { return !notHolder }

@@ -87,6 +87,16 @@ type fakeTelegram struct {
 	sent    []map[string]any
 	blocked map[int64]bool
 	next    int64
+	// notHolder: the bot is another addon's: the proxy answers 401 to everything.
+	notHolder bool
+	// loseAfter: after this many sends the bot goes to another addon (0: never).
+	loseAfter int
+}
+
+func (f *fakeTelegram) setHolder(h bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notHolder = !h
 }
 
 func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +106,14 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = dec.Decode(&in)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.notHolder {
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":401,"description":"Unauthorized"}`))
+		return
+	}
+	if path.Base(r.URL.Path) == "getMe" {
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"Bot"}}`))
+		return
+	}
 	chat, _ := strconv.ParseInt(string(in["chat_id"].(json.Number)), 10, 64)
 	if f.blocked[chat] {
 		_, _ = w.Write([]byte(`{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}`))
@@ -103,6 +121,9 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	in["method"] = path.Base(r.URL.Path)
 	f.sent = append(f.sent, in)
+	if f.loseAfter > 0 && len(f.sent) >= f.loseAfter {
+		f.notHolder, f.loseAfter = true, 0
+	}
 	f.next++
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": f.next, "chat": map[string]any{"id": chat}}})
 }
@@ -575,5 +596,67 @@ func TestBroadcastReachesEveryChat(t *testing.T) {
 	}
 	if j, err := e.b.CancelBroadcast(ctx); err != nil || j.State != plus.BcastCancelled {
 		t.Fatalf("cancel: %v %+v", err, j)
+	}
+}
+
+// While the bot is another addon's nothing is sent and nothing is lost: a broadcast does not
+// start, one that loses the bot midway waits and then goes on to the end.
+func TestBroadcastWaitsForTheBot(t *testing.T) {
+	e := newExtras(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for i := int64(1); i <= 40; i++ {
+		e.ex.Chats.Seen(5000+i, "", true)
+	}
+	msg := plus.Broadcast{Audience: "all", Message: plus.Message{Text: "Новости"}}
+	e.tg.setHolder(false)
+	if _, err := e.b.StartBroadcast(ctx, msg); err != ErrNotHolder {
+		t.Fatalf("not the holder: %v", err)
+	}
+	if err := e.b.TestMessage(ctx, 5001, msg.Message); err != ErrNotHolder {
+		t.Fatalf("test message: %v", err)
+	}
+	e.ex.Auto.Use(autoRules(e.now().Unix() - 1))
+	e.move(2 * time.Hour)
+	e.b.autoTick(ctx)
+	if c, _ := e.ex.Chats.Get(5001); len(c.Sent) != 0 {
+		t.Fatalf("an automatic message was marked sent while nothing could go: %+v", c.Sent)
+	}
+
+	// Given the bot: it starts, loses the bot after 10 messages, waits, goes on.
+	e.tg.setHolder(true)
+	e.b.bc().mu.Lock()
+	e.b.bc().holdAt = time.Time{}
+	e.b.bc().mu.Unlock()
+	e.tg.mu.Lock()
+	e.tg.loseAfter = 10
+	e.tg.mu.Unlock()
+	go e.b.BroadcastRun(ctx)
+	if _, err := e.b.StartBroadcast(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	var j *plus.Broadcast
+	e.wait("the pause", func() bool {
+		j, _ = e.ex.Broadcasts.Job(ctx)
+		return j != nil && j.State == plus.BcastRunning && j.Sent >= 10 && e.tg.count() >= 10
+	})
+	time.Sleep(300 * time.Millisecond)
+	j, _ = e.ex.Broadcasts.Job(ctx)
+	if j.State != plus.BcastRunning || j.Failed != 0 || j.Sent+j.Blocked >= j.Total {
+		t.Fatalf("paused: %+v", j)
+	}
+	e.tg.setHolder(true)
+	e.b.bc().mu.Lock()
+	e.b.bc().holdAt = time.Time{}
+	e.b.bc().mu.Unlock()
+	e.b.bc().poke()
+	e.wait("the end", func() bool { j, _ = e.ex.Broadcasts.Job(ctx); return j != nil && j.State == plus.BcastDone })
+	got := map[int64]int{}
+	for _, m := range e.tg.sent {
+		c, _ := strconv.ParseInt(string(m["chat_id"].(json.Number)), 10, 64)
+		got[c]++
+	}
+	if len(got) != j.Total || j.Sent != j.Total || j.Failed != 0 {
+		t.Fatalf("after the pause: %d chats reached, job %+v", len(got), j)
 	}
 }

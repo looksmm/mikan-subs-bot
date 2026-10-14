@@ -495,6 +495,7 @@ window.X = (() => {
     const miss = (v.missing || []).map((p) => ({ "users:all": "«Все пользователи»", kv: "«Хранилище»", events: "«События»", ui: "«Страницы»" })[p] || p);
     $("perms").hidden = !miss.length;
     $("perms").textContent = miss.length ? "Аддону не хватает прав: " + miss.join(", ") + ". Дайте их в «Аддоны» → этот аддон → «Права»: без «Все пользователи» рассылка не делит получателей по подписке, а автосообщения не знают, купил ли человек." : "";
+    $("holder").hidden = v.holder !== false;
     const c = v.chats || {};
     $("chats-count").textContent = c.loaded ? "Бот знает " + c.total + " чатов" + (c.blocked ? ", из них " + c.blocked + " заблокировали бота" : "") + "." : "Список чатов загружается…";
     if (first) {

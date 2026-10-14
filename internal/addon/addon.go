@@ -67,6 +67,8 @@ type Broadcaster interface {
 	CancelBroadcast(ctx context.Context) (*plus.Broadcast, error)
 	AudienceCounts() (map[string]int, bool)
 	TestMessage(ctx context.Context, chat int64, m plus.Message) error
+	// Holds says whether the panel gave the bot to this addon.
+	Holds(ctx context.Context) bool
 }
 
 // Serve answers the panel on listen until ctx ends.
@@ -192,6 +194,8 @@ type statusView struct {
 	Chats     chatsView       `json:"chats"`
 	// Missing are the permissions the extras need and the admin did not give.
 	Missing []string `json:"missing"`
+	// Holder: the panel gave the bot to this addon; until then nothing reaches Telegram.
+	Holder bool `json:"holder"`
 }
 
 type chatsView struct {
@@ -227,6 +231,12 @@ func status(ctx context.Context, d Deps) statusView {
 		}
 	}
 	v.Doings, v.Triggers, v.Audiences, v.Vars = plus.Doings, plus.Triggers, plus.Audiences, d.Vars
+	v.Holder = true
+	if d.Bot != nil {
+		hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		v.Holder = d.Bot.Holds(hctx)
+		cancel()
+	}
 	v.Missing = []string{}
 	if d.Menu != nil {
 		v.Menu = d.Menu.Get()
@@ -419,6 +429,10 @@ func rpc(w http.ResponseWriter, r *http.Request, d Deps) {
 		tctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		if err := d.Bot.TestMessage(tctx, in.Chat, in.Message); err != nil {
+			if err.Error() == "not_holder" {
+				writeJSON(w, http.StatusConflict, apiError{Code: "not_holder", Message: notHolderText})
+				return
+			}
 			writeJSON(w, http.StatusBadGateway, apiError{Code: "telegram", Message: telegramText(err)})
 			return
 		}
@@ -533,6 +547,8 @@ func broadcastFailed(w http.ResponseWriter, d Deps, err error) {
 		writeJSON(w, http.StatusConflict, apiError{Code: "busy", Message: "уже идёт рассылка: дождитесь её конца или остановите"})
 	case err.Error() == "broadcast_users":
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Code: "users", Message: "чтобы делить получателей по подписке, дайте аддону право «Все пользователи»"})
+	case err.Error() == "not_holder":
+		writeJSON(w, http.StatusConflict, apiError{Code: "not_holder", Message: notHolderText})
 	case err.Error() == "broadcast_empty":
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Code: "empty", Message: "в этой группе сейчас никого нет"})
 	default:
@@ -540,6 +556,9 @@ func broadcastFailed(w http.ResponseWriter, d Deps, err error) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Code: "failed", Message: "не получилось: " + err.Error()})
 	}
 }
+
+// notHolderText: the admin has not given the bot to this addon yet.
+const notHolderText = "бот сейчас у другого аддона: в «Аддоны» нажмите у этого аддона «Отдать бота», тогда он сможет писать в Telegram"
 
 // telegramText is what Telegram said, in words the admin understands.
 func telegramText(err error) string {

@@ -71,8 +71,8 @@ func (b *Bot) AutoRun(ctx context.Context) {
 // autoTick sends what is due now.
 func (b *Bot) autoTick(ctx context.Context) {
 	e := b.x.e
-	if !e.Auto.Loaded() || !e.Chats.Loaded() {
-		return
+	if !e.Auto.Loaded() || !e.Chats.Loaded() || !b.Holds(ctx) {
+		return // nothing goes, nothing is marked sent, while the bot is another addon's
 	}
 	a := e.Auto.Get()
 	now := b.d.Now()
@@ -354,6 +354,9 @@ func (b *Bot) msgVars(w *words, brand string, tg int64, sub *plus.Sub) map[strin
 // TestMessage sends m to chat now as an automatic message or a broadcast would, for the
 // admin to see it. It waits for Telegram's answer.
 func (b *Bot) TestMessage(ctx context.Context, chat int64, m plus.Message) error {
+	if !b.Holds(ctx) {
+		return ErrNotHolder
+	}
 	done := make(chan error, 1)
 	var sub *plus.Sub
 	if b.x != nil && b.x.e.Users != nil {

@@ -23,7 +23,41 @@ var (
 	ErrBroadcastNone  = errors.New("broadcast_none")
 	ErrBroadcastUsers = errors.New("broadcast_users") // the audience needs users:all
 	ErrBroadcastEmpty = errors.New("broadcast_empty")
+	// ErrNotHolder: the admin has not given the bot to this addon: Telegram is not its to use.
+	ErrNotHolder = errors.New("not_holder")
 )
+
+// holderTTL: how long the answer of whether the bot is this addon's is kept.
+const holderTTL = 20 * time.Second
+
+// Holds says whether the panel gave the bot to this addon: the Bot API proxy answers
+// everyone else 401. Asked at most every holderTTL.
+func (b *Bot) Holds(ctx context.Context) bool {
+	r := b.bc()
+	r.mu.Lock()
+	if time.Since(r.holdAt) < holderTTL {
+		h := r.holds
+		r.mu.Unlock()
+		return h
+	}
+	r.mu.Unlock()
+	_, err := b.d.Client.Me(ctx)
+	var ae *tgate.APIError
+	h := !(errors.As(err, &ae) && ae.Code == 401)
+	if err != nil && h {
+		return true // the way to the panel failed: no news about who holds the bot
+	}
+	r.mu.Lock()
+	r.holds, r.holdAt = h, time.Now()
+	r.mu.Unlock()
+	return h
+}
+
+// notHolderErr: a send the proxy refused because the bot is another addon's.
+func notHolderErr(err error) bool {
+	var ae *tgate.APIError
+	return errors.As(err, &ae) && ae.Code == 401
+}
 
 // bulkInFlight: how many messages of a broadcast wait in the outbox at most.
 const bulkInFlight = 200
@@ -34,6 +68,8 @@ type bcast struct {
 	mu     sync.Mutex
 	wake   chan struct{}
 	cancel atomic.Bool
+	holds  bool      // the bot is this addon's, as last asked
+	holdAt time.Time // when that was asked
 }
 
 func (b *Bot) bc() *bcast {
@@ -131,6 +167,9 @@ func (b *Bot) StartBroadcast(ctx context.Context, j plus.Broadcast) (*plus.Broad
 	}
 	if err := j.Valid(); err != nil {
 		return nil, err
+	}
+	if !b.Holds(ctx) {
+		return nil, ErrNotHolder
 	}
 	r := b.bc()
 	r.mu.Lock()
@@ -259,8 +298,12 @@ func (b *Bot) bcastStep(ctx context.Context) error {
 }
 
 // sendJob sends a running job from where it stopped. A restart resumes from the messages
-// that are done: one in the outbox when it stopped may go twice, none is lost.
+// that are done: one in the outbox when it stopped may go twice, none is lost. While the bot
+// is another addon's the job waits: the proxy would refuse every message.
 func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
+	if !b.Holds(ctx) {
+		return nil
+	}
 	st := b.x.e.Broadcasts
 	r := b.bc()
 	pm := b.prepareMsg(ctx, j.Message)
@@ -270,6 +313,7 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 		byTg, _, _ = b.x.e.Users.Snapshot()
 	}
 	var sent, failed, blocked, inFlight atomic.Int64
+	var lost atomic.Bool // the proxy refused a message: the bot was given to another addon
 	sent.Store(int64(j.Sent))
 	failed.Store(int64(j.Failed))
 	blocked.Store(int64(j.Blocked))
@@ -278,6 +322,9 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 		switch {
 		case err == nil:
 			sent.Add(1)
+		case notHolderErr(err):
+			// Not done: it goes again once the bot is this addon's.
+			lost.Store(true)
 		case errors.As(err, &ae) && ae.Code == 403:
 			blocked.Add(1)
 		default:
@@ -291,7 +338,7 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 	}
 	lastSave := time.Now()
 	start := j.Sent + j.Failed + j.Blocked
-	for n := start / plus.BcastChunk; n < j.Chunks && !r.cancel.Load() && ctx.Err() == nil; n++ {
+	for n := start / plus.BcastChunk; n < j.Chunks && !r.cancel.Load() && !lost.Load() && ctx.Err() == nil; n++ {
 		to, err := st.Recipients(ctx, j, n)
 		if err != nil {
 			return err
@@ -301,14 +348,14 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 			if idx < start {
 				continue
 			}
-			for inFlight.Load() >= bulkInFlight && ctx.Err() == nil && !r.cancel.Load() {
+			for inFlight.Load() >= bulkInFlight && ctx.Err() == nil && !r.cancel.Load() && !lost.Load() {
 				time.Sleep(100 * time.Millisecond)
 				if time.Since(lastSave) > 2*time.Second {
 					save()
 					lastSave = time.Now()
 				}
 			}
-			if ctx.Err() != nil || r.cancel.Load() {
+			if ctx.Err() != nil || r.cancel.Load() || lost.Load() {
 				break
 			}
 			sub := pickSub(byTg[tg])
@@ -331,6 +378,15 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 	}
 	if ctx.Err() != nil {
 		save()
+		return nil
+	}
+	if lost.Load() && !r.cancel.Load() {
+		// Paused: the job stays running and resumes from what is done once the bot is back.
+		save()
+		r.mu.Lock()
+		r.holdAt = time.Time{}
+		r.mu.Unlock()
+		b.d.Log.Warn("broadcast: paused, the bot is another addon's", "id", j.ID, "done", j.Sent+j.Failed+j.Blocked, "total", j.Total)
 		return nil
 	}
 	r.mu.Lock()
