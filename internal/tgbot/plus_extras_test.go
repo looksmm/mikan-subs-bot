@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -91,6 +92,8 @@ type fakeTelegram struct {
 	notHolder bool
 	// loseAfter: after this many sends the bot goes to another addon (0: never).
 	loseAfter int
+	// jitter: each answer waits up to this long, so the sends end out of order.
+	jitter time.Duration
 }
 
 func (f *fakeTelegram) setHolder(h bool) {
@@ -100,6 +103,12 @@ func (f *fakeTelegram) setHolder(h bool) {
 }
 
 func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	jitter := f.jitter
+	f.mu.Unlock()
+	if jitter > 0 {
+		time.Sleep(time.Duration(rand.Int64N(int64(jitter))))
+	}
 	var in map[string]any
 	dec := json.NewDecoder(r.Body)
 	dec.UseNumber()
@@ -629,7 +638,7 @@ func TestBroadcastWaitsForTheBot(t *testing.T) {
 	e.b.bc().holdAt = time.Time{}
 	e.b.bc().mu.Unlock()
 	e.tg.mu.Lock()
-	e.tg.loseAfter = 10
+	e.tg.loseAfter, e.tg.jitter = 10, 8*time.Millisecond
 	e.tg.mu.Unlock()
 	go e.b.BroadcastRun(ctx)
 	if _, err := e.b.StartBroadcast(ctx, msg); err != nil {
@@ -655,6 +664,11 @@ func TestBroadcastWaitsForTheBot(t *testing.T) {
 	for _, m := range e.tg.sent {
 		c, _ := strconv.ParseInt(string(m["chat_id"].(json.Number)), 10, 64)
 		got[c]++
+	}
+	for c, n := range got {
+		if n != 1 {
+			t.Errorf("chat %d got %d messages", c, n)
+		}
 	}
 	if len(got) != j.Total || j.Sent != j.Total || j.Failed != 0 {
 		t.Fatalf("after the pause: %d chats reached, job %+v", len(got), j)

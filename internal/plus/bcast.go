@@ -43,8 +43,11 @@ type Broadcast struct {
 	Sent    int    `json:"sent"`
 	Failed  int    `json:"failed"`
 	Blocked int    `json:"blocked"`
-	// Next is the index of the next recipient to send to.
+	// Next: every recipient below this index is done (sent, refused or failed); Ahead are the
+	// done ones past it. The messages go out of order (several at once), so a job that stops
+	// resumes with exactly the rest: nobody twice, nobody missed.
 	Next     int    `json:"next"`
+	Ahead    []int  `json:"ahead,omitempty"`
 	Chunks   int    `json:"chunks"`
 	Created  int64  `json:"created"`
 	Started  int64  `json:"started,omitempty"`

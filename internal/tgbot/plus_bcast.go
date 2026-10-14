@@ -297,9 +297,62 @@ func (b *Bot) bcastStep(ctx context.Context) error {
 	return b.sendJob(ctx, j)
 }
 
-// sendJob sends a running job from where it stopped. A restart resumes from the messages
-// that are done: one in the outbox when it stopped may go twice, none is lost. While the bot
-// is another addon's the job waits: the proxy would refuse every message.
+// progress is which recipients of a job are done: everyone below next, and those in ahead.
+type progress struct {
+	mu    sync.Mutex
+	next  int
+	ahead map[int]bool
+}
+
+func newProgress(j *plus.Broadcast) *progress {
+	p := &progress{next: j.Next, ahead: map[int]bool{}}
+	done := j.Sent + j.Failed + j.Blocked
+	if len(j.Ahead) == 0 && p.next > done {
+		p.next = done // a job of 1.0.1: Next counted what was queued, not what was done
+	}
+	for _, i := range j.Ahead {
+		if i >= p.next {
+			p.ahead[i] = true
+		}
+	}
+	return p
+}
+
+func (p *progress) done(i int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i < p.next {
+		return
+	}
+	p.ahead[i] = true
+	for p.ahead[p.next] {
+		delete(p.ahead, p.next)
+		p.next++
+	}
+}
+
+func (p *progress) isDone(i int) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return i < p.next || p.ahead[i]
+}
+
+// put writes the progress into the job.
+func (p *progress) put(j *plus.Broadcast) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	j.Next = p.next
+	j.Ahead = j.Ahead[:0]
+	for i := range p.ahead {
+		j.Ahead = append(j.Ahead, i)
+	}
+	slices.Sort(j.Ahead)
+}
+
+// sendJob sends what is left of a running job. The job's progress is saved every few
+// seconds; a restart may send again the few messages that went out after the last save,
+// a pause (the bot given to another addon) sends nobody twice. While the bot is another
+// addon's the job waits: the proxy would refuse every message.
 func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 	if !b.Holds(ctx) {
 		return nil
@@ -312,56 +365,62 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 	if b.x.e.Users != nil {
 		byTg, _, _ = b.x.e.Users.Snapshot()
 	}
+	prog := newProgress(j)
 	var sent, failed, blocked, inFlight atomic.Int64
 	var lost atomic.Bool // the proxy refused a message: the bot was given to another addon
 	sent.Store(int64(j.Sent))
 	failed.Store(int64(j.Failed))
 	blocked.Store(int64(j.Blocked))
-	done := func(err error) {
-		var ae *tgate.APIError
-		switch {
-		case err == nil:
-			sent.Add(1)
-		case notHolderErr(err):
-			// Not done: it goes again once the bot is this addon's.
-			lost.Store(true)
-		case errors.As(err, &ae) && ae.Code == 403:
-			blocked.Add(1)
-		default:
-			failed.Add(1)
+	doneOf := func(idx int) func(error) {
+		return func(err error) {
+			var ae *tgate.APIError
+			switch {
+			case err == nil:
+				sent.Add(1)
+			case notHolderErr(err):
+				// Not done: it goes again once the bot is this addon's.
+				lost.Store(true)
+				inFlight.Add(-1)
+				return
+			case errors.As(err, &ae) && ae.Code == 403:
+				blocked.Add(1)
+			default:
+				failed.Add(1)
+			}
+			prog.done(idx)
+			inFlight.Add(-1)
 		}
-		inFlight.Add(-1)
 	}
 	save := func() {
 		j.Sent, j.Failed, j.Blocked = int(sent.Load()), int(failed.Load()), int(blocked.Load())
+		prog.put(j)
 		_ = st.Save(ctx, j)
 	}
 	lastSave := time.Now()
-	start := j.Sent + j.Failed + j.Blocked
-	for n := start / plus.BcastChunk; n < j.Chunks && !r.cancel.Load() && !lost.Load() && ctx.Err() == nil; n++ {
+	stop := func() bool { return ctx.Err() != nil || r.cancel.Load() || lost.Load() }
+	for n := prog.next / plus.BcastChunk; n < j.Chunks && !stop(); n++ {
 		to, err := st.Recipients(ctx, j, n)
 		if err != nil {
 			return err
 		}
 		for i, tg := range to {
 			idx := n*plus.BcastChunk + i
-			if idx < start {
+			if prog.isDone(idx) {
 				continue
 			}
-			for inFlight.Load() >= bulkInFlight && ctx.Err() == nil && !r.cancel.Load() && !lost.Load() {
+			for inFlight.Load() >= bulkInFlight && !stop() {
 				time.Sleep(100 * time.Millisecond)
 				if time.Since(lastSave) > 2*time.Second {
 					save()
 					lastSave = time.Now()
 				}
 			}
-			if ctx.Err() != nil || r.cancel.Load() || lost.Load() {
+			if stop() {
 				break
 			}
 			sub := pickSub(byTg[tg])
 			inFlight.Add(1)
-			j.Next = idx + 1
-			b.queueAdmin(tg, pm, b.msgVars(w, pm.brand, tg, sub), sub != nil && sub.Works(), "bulk", done)
+			b.queueAdmin(tg, pm, b.msgVars(w, pm.brand, tg, sub), sub != nil && sub.Works(), "bulk", doneOf(idx))
 		}
 	}
 	// What is in the outbox goes out before the job ends.
@@ -381,7 +440,7 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 		return nil
 	}
 	if lost.Load() && !r.cancel.Load() {
-		// Paused: the job stays running and resumes from what is done once the bot is back.
+		// Paused: the job stays running and resumes with the rest once the bot is back.
 		save()
 		r.mu.Lock()
 		r.holdAt = time.Time{}
@@ -391,11 +450,12 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	j.Sent, j.Failed, j.Blocked = int(sent.Load()), int(failed.Load()), int(blocked.Load())
+	save()
 	j.State, j.Finished = plus.BcastDone, b.d.Now().Unix()
 	if r.cancel.Load() {
 		j.State = plus.BcastCancelled
 	}
+	j.Ahead = nil
 	b.d.Log.Info("broadcast: done", "id", j.ID, "state", j.State, "sent", j.Sent, "failed", j.Failed, "blocked", j.Blocked)
 	return st.Done(ctx, j)
 }
