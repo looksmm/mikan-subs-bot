@@ -1,0 +1,14 @@
+{
+  "id": "subs-bot",
+  "name": {"ru": "Бот подписчиков", "en": "Subscribers' bot"},
+  "description": {
+    "ru": "Telegram-бот подписчиков на основе официального бота mikan: своё меню деревом разделов, рассылка всем, кто запускал бота, автосообщения с кнопками, иконки и цветные кнопки, свои тексты экранов. Без своей базы: всё хранится в панели.",
+    "en": "A subscribers' Telegram bot built on mikan's official bot: a menu of your own as a tree of screens, broadcasts to everyone who started the bot, automatic messages with buttons, icons and coloured buttons, your own screen texts. No database of its own: everything is kept in the panel."
+  },
+  "protocol": 2,
+  "kind": "bot",
+  "mode": "http",
+  "permissions": ["bot", "users:read", "users:write", "users:all", "billing:invoice", "events", "kv", "ui"],
+  "resources": {"mem_mb": 128},
+  "min_panel": "0.5.1.0"
+}

@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Бот подписчиков</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="bot.css">
+<script src="common.js" defer></script>
+<script src="extras.js" defer></script>
+<script src="bot.js" defer></script>
+</head>
+<body>
+<main id="app" aria-busy="true">
+  <header class="top">
+    <div>
+      <h1>Бот подписчиков</h1>
+      <p class="sub">Официальный бот mikan со своим меню, автосообщениями и рассылкой всем, кто запускал бота. Тарифы, оплата, приветствие и уведомления о сроке — по-прежнему в «Telegram» и «Платежах» панели.</p>
+    </div>
+    <span id="state" class="pill">Загрузка…</span>
+  </header>
+
+  <div id="error" class="banner bad" hidden></div>
+  <div id="perms" class="banner warn" hidden></div>
+  <div id="refused" class="banner warn" hidden></div>
+
+  <nav class="tabs" role="tablist" aria-label="Разделы">
+    <button type="button" role="tab" data-tab="menu" aria-selected="true">Меню</button>
+    <button type="button" role="tab" data-tab="auto" aria-selected="false">Автосообщения</button>
+    <button type="button" role="tab" data-tab="broadcast" aria-selected="false">Рассылка</button>
+    <button type="button" role="tab" data-tab="texts" aria-selected="false">Тексты и экраны</button>
+    <button type="button" role="tab" data-tab="look" aria-selected="false">Иконки и цвета</button>
+    <button type="button" role="tab" data-tab="about" aria-selected="false">О сервисе</button>
+    <button type="button" role="tab" data-tab="welcome" aria-selected="false">Первый экран</button>
+  </nav>
+
+  <div class="tab" data-panel="menu">
+    <section>
+      <div class="row between wrap">
+        <h2>Своё меню</h2>
+        <label class="switch"><input type="checkbox" id="menu-on" disabled><span>Показывать вместо стандартного</span></label>
+      </div>
+      <p class="hint">Меню из разделов: у каждого свой текст и кнопки. Кнопка открывает другой раздел или делает то, что умеет бот: подписка, продление, покупка, пробный период, ссылка. Кнопки, которым нечего делать (пробный период уже взят, у человека нет подписки), бот сам прячет. Разделы открываются кнопками рассылок и автосообщений, даже когда своё меню выключено.</p>
+      <div class="menu-roots">
+        <div class="field">
+          <label for="menu-main">Главное меню — у кого есть подписка</label>
+          <select id="menu-main" disabled></select>
+        </div>
+        <div class="field">
+          <label for="menu-welcome">Первый экран — у кого её нет</label>
+          <select id="menu-welcome" disabled></select>
+        </div>
+      </div>
+      <div class="cards" id="screens"><p class="empty">Загрузка…</p></div>
+      <div class="row wrap gap-top">
+        <button type="button" id="screen-add" disabled>+ Раздел</button>
+        <button type="button" id="menu-starter" disabled hidden>Начать с готового меню</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="tab" data-panel="auto" hidden>
+    <section>
+      <h2>Автосообщения</h2>
+      <p class="hint">Бот пишет сам — после первого запуска, если человек не оформил подписку, после оплаты, перед концом и после конца подписки, когда кончается трафик. Кнопки под сообщением открывают меню бота отдельным сообщением, само автосообщение остаётся. Каждое правило срабатывает только на то, что случилось после его создания, и один раз на человека и событие. Ночью (22:00–9:00 МСК) сообщения приходят без звука, если так настроено в панели.</p>
+      <div class="cards" id="rules"><p class="empty">Загрузка…</p></div>
+      <button type="button" id="rule-add" class="gap-top" disabled>+ Автосообщение</button>
+    </section>
+  </div>
+
+  <div class="tab" data-panel="broadcast" hidden>
+    <section>
+      <div class="row between wrap">
+        <h2>Рассылка</h2>
+        <button type="button" id="bc-refresh" class="small-btn">Обновить</button>
+      </div>
+      <p class="hint">Одно сообщение всем, кто когда-либо запускал бота, или части из них. Стандартная рассылка панели доходит только до тех, у кого есть подписка; эта — до всех. Сообщения уходят в фоне, после ответов на нажатия и уведомлений; если бот перезапустится, рассылка продолжится. <span id="chats-count"></span></p>
+      <div id="bc-error" class="banner bad" hidden></div>
+      <div id="job"></div>
+      <div id="bc-busy" class="check wait" hidden>Пока идёт рассылка, новую начать нельзя.</div>
+      <div class="field narrow gap-top">
+        <label for="test-chat">Ваш Telegram ID — для кнопки «Отправить себе»</label>
+        <input type="text" id="test-chat" inputmode="numeric" spellcheck="false" placeholder="например, 123456789" disabled>
+        <small>Число из профиля Telegram (его покажет, например, @userinfobot). Вы должны хотя бы раз запустить бота. Сохраняется кнопкой «Сохранить».</small>
+      </div>
+    </section>
+    <section>
+      <h3>Кому</h3>
+      <div class="audiences" id="audiences"></div>
+      <h3 class="gap-top">Сообщение</h3>
+      <div id="bc-msg"></div>
+      <div class="row wrap gap-top">
+        <select id="bc-when" aria-label="Когда">
+          <option value="now">Сейчас</option>
+          <option value="at">По времени</option>
+        </select>
+        <input type="datetime-local" id="bc-at" hidden aria-label="Время начала">
+        <button type="button" id="bc-start" class="primary" disabled>Начать рассылку</button>
+      </div>
+    </section>
+    <section>
+      <h3>Прошлые рассылки</h3>
+      <div id="history"></div>
+    </section>
+  </div>
+
+  <div class="tab" data-panel="texts" hidden>
+    <section>
+      <div class="row between wrap">
+        <h2>Тексты бота</h2>
+        <span id="texts-count" class="muted small"></span>
+      </div>
+      <p class="hint"><b>Экраны бота целиком</b> — весь текст экрана своими словами: «Подписка», меню покупки («Продлить» и «Купить подписку»), выбранный тариф, «Устройства», «Подключить устройство», «Докупить трафик». Кнопки под текстом остаются как есть. Нажмите «Взять за основу вид mikan», чтобы начать с нынешнего текста.</p>
+      <p class="hint"><b>Отдельные надписи</b> — подписи кнопок, заголовки и сообщения: пустое поле — встроенный текст mikan, он показан серым. Где в надписи есть <span class="code">%s</span> или <span class="code">%d</span>, бот подставляет значения (имя, дату, цену) — их нужно оставить, по порядку.</p>
+      <p class="hint">В панели остаются: приветствие, шапка главного меню и уведомления о сроке и трафике («Telegram → Меню и тексты»), описание каждого тарифа («Тарифы → Описание для покупателей», в меню покупки это <span class="code">{description}</span>).</p>
+      <div class="field narrow">
+        <input type="text" id="texts-search" placeholder="Найти текст: например, «Назад», «пробный» или «покупки»" disabled>
+      </div>
+      <div class="texts" id="texts"><p class="empty">Загрузка…</p></div>
+    </section>
+  </div>
+
+  <div class="tab" data-panel="look" hidden>
+    <section>
+      <div class="row between wrap">
+        <h2>Иконки и цвета кнопок</h2>
+        <label class="switch"><input type="checkbox" id="look-on" disabled><span>Включено</span></label>
+      </div>
+      <p class="hint">Иконка — свой эмодзи Telegram перед надписью кнопки, задаётся его ID (число из Telegram, например <span class="code">5134263008683362081</span>). Свои эмодзи бот показывает, только если у владельца бота есть Telegram Premium. Без него Telegram покажет кнопки без иконок. Цвет кнопки работает всегда.</p>
+      <label class="switch"><input type="checkbox" id="strip" disabled><span>Убирать обычный эмодзи в начале надписи, если у кнопки есть иконка</span></label>
+      <div class="icons" id="icons"><p class="empty">Загрузка…</p></div>
+      <div class="row wrap gap-top">
+        <button type="button" id="defaults" disabled>Готовый набор иконок</button>
+        <button type="button" id="clear-icons" disabled>Убрать все иконки</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Свои эмодзи в текстах</h2>
+      <p class="hint">Обычный эмодзи в сообщениях бота (во встроенных текстах, в ваших с этой страницы и из «Telegram → Меню и тексты») заменяется своим эмодзи Telegram с этим ID. Где свой показать нельзя (уведомления, пересылка), Telegram покажет обычный.</p>
+      <div class="emoji" id="emoji"></div>
+      <button type="button" id="emoji-add" disabled>Добавить замену</button>
+    </section>
+  </div>
+
+  <div class="tab" data-panel="about" hidden>
+    <section>
+      <div class="row between wrap">
+        <h2>О сервисе</h2>
+        <label class="switch"><input type="checkbox" id="about-on" disabled><span>Включено</span></label>
+      </div>
+      <p class="hint">Отдельный экран: текст о сервисе и кнопки документов (политика конфиденциальности, соглашение). Отмеченные кнопки уходят из главного меню и первого экрана сюда, а на их месте появляется кнопка «О сервисе».</p>
+      <div class="settings">
+        <div class="field">
+          <label for="about-label">Надпись кнопки</label>
+          <input type="text" id="about-label" maxlength="40" spellcheck="false" disabled>
+        </div>
+        <label class="switch"><input type="checkbox" id="about-support" disabled><span>В одном ряду с «Поддержкой», перед ней</span></label>
+        <div class="field">
+          <label for="about-text">Текст экрана</label>
+          <textarea id="about-text" rows="6" spellcheck="false" disabled></textarea>
+          <small>Пусто — текст по умолчанию (показан серым). Разметка как в текстах панели, <span class="code">{brand}</span> — название сервиса.</small>
+        </div>
+        <div class="field">
+          <label>Кнопки на экране</label>
+          <small>Ваши кнопки-ссылки и страницы из «Telegram → Меню и тексты». Короткая надпись нужна, чтобы две кнопки поместились в один ряд; пусто — надпись из панели.</small>
+          <div class="about-items" id="about-items"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="tab" data-panel="welcome" hidden>
+    <section>
+      <h2>Первый экран</h2>
+      <p class="hint">Если во вкладке «Меню» выбран свой первый экран, эти настройки не действуют. Без него тот, у кого ещё нет подписки, видит вместо меню приветствие mikan: пробный период, покупку и поддержку. Ваши кнопки-ссылки и страницы из «Telegram → Меню и тексты» (соглашение, конфиденциальность) бот показывает там же, внизу, тем же рядом, что и в меню. Здесь можно убрать лишние.</p>
+      <div class="welcome" id="welcome"><p class="empty">Загрузка…</p></div>
+    </section>
+  </div>
+
+  <section>
+    <details id="transfer">
+      <summary><h3>Перенос настроек</h3></summary>
+      <p class="hint">Все настройки этой страницы одним текстом: оформление, тексты, «О сервисе», меню, автосообщения. Сохраните его себе перед тем, как удалять или переставлять аддон: при удалении панель стирает всё, что аддон хранил. На другой панели вставьте этот текст и нажмите «Загрузить». Список чатов и рассылки не переносятся.</p>
+      <div class="row wrap">
+        <button type="button" id="export" class="small-btn">Выгрузить</button>
+        <button type="button" id="export-select" class="small-btn" hidden>Выделить всё</button>
+      </div>
+      <textarea id="export-text" rows="6" spellcheck="false" readonly hidden></textarea>
+      <div class="field gap-top">
+        <label for="import-text">Загрузить настройки</label>
+        <textarea id="import-text" rows="4" spellcheck="false" placeholder="Вставьте сюда текст из «Выгрузить»"></textarea>
+      </div>
+      <div class="row wrap gap-top">
+        <button type="button" id="import" class="small-btn">Загрузить и сохранить</button>
+        <small id="import-state" class="muted"></small>
+      </div>
+    </details>
+  </section>
+
+  <p class="muted small foot" id="f-version"></p>
+
+  <div id="savebar" class="savebar" hidden>
+    <span id="savebar-text">Есть несохранённые изменения</span>
+    <div class="row">
+      <span id="toast" class="toast" hidden>Сохранено</span>
+      <button type="button" id="revert">Отменить</button>
+      <button type="button" id="save" class="primary">Сохранить</button>
+    </div>
+  </div>
+</main>
+</body>
+</html>

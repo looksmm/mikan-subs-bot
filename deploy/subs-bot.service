@@ -1,0 +1,38 @@
+[Unit]
+Description=subs-bot: a subscribers' Telegram bot, a mikan addon (process on the server)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The tokens and the panel's API for addons come from the host's state; the page answers
+# the panel on loopback.
+Environment=BOT_ADDON_STATE=/opt/mikan/addons/state.json
+Environment=BOT_ADDON_ID=subs-bot
+Environment=BOT_LISTEN=127.0.0.1:18490
+ExecStart=/usr/local/bin/subs-bot
+Restart=always
+RestartSec=3
+# It reads one file of root's and talks HTTP: nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+ReadOnlyPaths=/opt/mikan/addons
+InaccessiblePaths=-/opt/mikan/.env -/root
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
