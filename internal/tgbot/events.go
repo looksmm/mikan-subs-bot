@@ -126,12 +126,15 @@ func (b *Bot) HandleEvent(ctx context.Context, e events.Event) error {
 		}
 		cfg := b.config(ctx)
 		now := b.d.Now()
+		if b.ownBuiltin(ctx, kind, e.TgID, b.noticeVars(ctx, wordsFor(cfg.Lang), e.TgID, u), true) { // plus
+			return nil
+		}
 		text, kb := b.noticeMessage(ctx, cfg, wordsFor(cfg.Lang), u, kind, now)
 		silent, chat := cfg.QuietNight && night(now), e.TgID
 		b.d.Outbox.Notice(chat, func(ctx context.Context, c *tgate.Client) error {
 			_, err := c.Send(ctx, chat, text, kb, silent)
 			return err
-		}, nil)
+		}, b.countBuiltin(kind))
 	}
 	return nil
 }

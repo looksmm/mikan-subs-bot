@@ -263,8 +263,8 @@ func wordsFor(lang string) *words {
 		return &en
 	}
 	// plus: the admin's own texts over the built-in ones (plus_texts.go).
-	if wordsHook != nil {
-		return wordsHook(&ru)
+	if h := wordsHook.Load(); h != nil {
+		return (*h)(&ru)
 	}
 	return &ru
 }

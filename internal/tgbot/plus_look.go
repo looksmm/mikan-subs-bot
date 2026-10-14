@@ -50,7 +50,7 @@ type ext struct {
 func (b *Bot) Plus(set *plus.Store, log *slog.Logger) {
 	b.x = &ext{set: set, log: log}
 	b.d.Client.Decorate(b.dress, b.x.onRefused)
-	wordsHook = b.x.words
+	setWordsHook(b.x.words)
 	set.Check(CheckTexts)
 }
 
@@ -235,6 +235,9 @@ func (lc *lookCtx) key(btn map[string]any) string {
 	if cb, ok := btn["callback_data"].(string); ok {
 		// Under a message of the admin's: the button of the screen it opens.
 		cb = strings.TrimPrefix(cb, freshCode+":")
+		if rest, ok := strings.CutPrefix(cb, taggedCode+":"); ok {
+			_, cb, _ = strings.Cut(rest, ":")
+		}
 		cmd, arg, _ := strings.Cut(cb, ":")
 		switch cmd {
 		case "p":

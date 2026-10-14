@@ -72,7 +72,11 @@ func main() {
 				state = "expired"
 			}
 			exp := time.Now().Add(time.Duration(i) * 24 * time.Hour)
-			subs = append(subs, plus.Sub{ID: i, Name: fmt.Sprintf("user-%d", i), State: state, TariffName: "Стандарт", ExpiresAt: &exp, TgID: &tg})
+			tariff := "Стандарт"
+			if i%3 == 0 {
+				tariff = "Премиум"
+			}
+			subs = append(subs, plus.Sub{ID: i, Name: fmt.Sprintf("user-%d", i), State: state, TariffName: tariff, ExpiresAt: &exp, TgID: &tg})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"users": subs, "next": nil})
 	})
@@ -102,6 +106,15 @@ func main() {
 	users := plus.NewUsers(base, "p", log)
 	_ = users.Refresh(ctx)
 	jobs := plus.NewBroadcasts(kvc)
+	stats := plus.NewStats(kvc, log, time.Now)
+	_ = stats.Load(ctx)
+	for i := 0; i < 37; i++ {
+		stats.Sent("m.paid_new")
+		if i%3 == 0 {
+			stats.Pressed("m.paid_new")
+		}
+	}
+	stats.Sent("m.expire_1d")
 	d := addon.Deps{ID: "subs-bot", State: state, Version: "demo", Set: set, Log: log, Texts: tgbot.TextEntries, AboutText: tgbot.DefaultAboutText,
 		MenuButtons: func(context.Context) []plus.Button {
 			return []plus.Button{{Key: "btn:c7", Name: "📰 Новости", Hint: "ваша кнопка-ссылка"}, {Key: "page:c8", Name: "📄 Правила", Hint: "ваша кнопка-страница"}}
@@ -112,7 +125,17 @@ func main() {
 			}
 			return "", time.Time{}
 		},
-		Menu: menu, Auto: auto, Chats: chats, Users: users, Jobs: jobs, Vars: tgbot.Vars,
+		Menu: menu, Auto: auto, Chats: chats, Users: users, Jobs: jobs, Vars: tgbot.Vars, Stats: stats,
+		BuiltinDefaults: func(context.Context) map[string]string {
+			out := map[string]string{}
+			for _, m := range plus.Builtins {
+				out[m.Key] = "Стандартный текст «" + m.Name + "» из панели.\nВторая строка."
+			}
+			return out
+		},
+		PanelNotify: func(context.Context) map[string]bool {
+			return map[string]bool{"expire_3d": true, "expire_1d": true, "expired": false, "traffic_90": true, "traffic_100": true}
+		},
 		Bot: &demoBot{jobs: jobs, chats: chats, users: users, log: log}}
 	log.Info("page", "listen", *listen)
 	if err := addon.Serve(ctx, *listen, d); err != nil {

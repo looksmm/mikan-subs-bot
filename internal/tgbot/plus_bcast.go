@@ -359,7 +359,7 @@ func (b *Bot) sendJob(ctx context.Context, j *plus.Broadcast) error {
 	}
 	st := b.x.e.Broadcasts
 	r := b.bc()
-	pm := b.prepareMsg(ctx, j.Message)
+	pm := b.prepareMsg(ctx, j.Message, "b."+j.ID)
 	w := wordsFor(b.config(ctx).Lang)
 	var byTg map[int64][]plus.Sub
 	if b.x.e.Users != nil {

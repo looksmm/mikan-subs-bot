@@ -25,6 +25,7 @@ type Sub struct {
 	ID         int64      `json:"id"`
 	Name       string     `json:"name"`
 	State      string     `json:"state"` // active, expiring, limited, expired, disabled
+	TariffID   *int64     `json:"tariff_id"`
 	TariffName string     `json:"tariff_name"`
 	ExpiresAt  *time.Time `json:"expires_at"`
 	TgID       *int64     `json:"tg_id"`

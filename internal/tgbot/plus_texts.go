@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"subsbot/internal/plus"
@@ -24,8 +25,17 @@ type textField struct {
 const maxTextRunes = 3000
 
 // wordsHook gives the words the bot speaks in: the built-in Russian ones with the admin's
-// texts over them. nil is mikan's words as they are.
-var wordsHook func(base *words) *words
+// texts over them. None set is mikan's words as they are. Set once at start, read by every
+// screen: atomic, as the screens are drawn in the outbox's workers.
+var wordsHook atomic.Pointer[func(base *words) *words]
+
+func setWordsHook(f func(base *words) *words) {
+	if f == nil {
+		wordsHook.Store(nil)
+		return
+	}
+	wordsHook.Store(&f)
+}
 
 // words is base with the texts of the settings over it, kept until the settings change.
 func (x *ext) words(base *words) *words {

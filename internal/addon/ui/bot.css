@@ -136,3 +136,5 @@ input[type="datetime-local"] { font: inherit; color: var(--text); background: va
 .ask-q { font-size: 13px; font-weight: 600; }
 #transfer > summary { margin-bottom: 4px; }
 #export-text, #import-text { margin-top: 8px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.std-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; color: var(--muted); border: 1px dashed var(--hairline); border-radius: 10px; padding: 8px 10px; }
+.tariffs { display: flex; flex-wrap: wrap; gap: 8px 16px; }

@@ -15,10 +15,19 @@ import (
 // autoKey is where the automatic messages live in the panel's store.
 const autoKey = "auto"
 
-// Auto is the admin's automatic messages.
+// Auto is the admin's automatic messages: their own rules, and the bot's own messages (a
+// payment, a refund, the reminders) as the admin words them.
 type Auto struct {
 	Rules []Rule `json:"rules"`
-	Saved int64  `json:"saved"`
+	// Builtin: the bot's own messages by key (Builtins), as the admin set them.
+	Builtin map[string]Builtin `json:"builtin,omitempty"`
+	Saved   int64              `json:"saved"`
+}
+
+// Builtin is one of the bot's own messages: the standard one, the admin's, or none.
+type Builtin struct {
+	Mode    string  `json:"mode"` // "" the standard one, "own" the message below, "off" none
+	Message Message `json:"message"`
 }
 
 // Rule is one automatic message: when it goes and what it says.
@@ -35,8 +44,10 @@ type Rule struct {
 	First bool `json:"first,omitempty"`
 	// Replace: the panel's own notice of the same thing does not go (expiring, expired,
 	// traffic).
-	Replace bool    `json:"replace,omitempty"`
-	Message Message `json:"message"`
+	Replace bool `json:"replace,omitempty"`
+	// Tariffs: only subscriptions of these tariffs (by name); none: any.
+	Tariffs []string `json:"tariffs,omitempty"`
+	Message Message  `json:"message"`
 	// Created is when the rule was made (unix): it acts on what happens after that, never
 	// on the past.
 	Created int64 `json:"created"`
@@ -66,8 +77,10 @@ var Triggers = []Trigger{
 	{Key: "start", Name: "Первый запуск бота", Hint: "через заданное время после первого /start"},
 	{Key: "no_sub", Name: "Не оформил подписку", Hint: "через заданное время после первого /start, если подписки так и нет"},
 	{Key: "paid", Name: "Оплата", Hint: "после оплаты подписки или продления", Sub: true},
-	{Key: "expiring", Name: "Подписка скоро закончится", Hint: "когда панель напоминает: за 3 дня и за 1 день", Notice: true, Sub: true},
-	{Key: "expired", Name: "Подписка закончилась", Hint: "в день окончания; с задержкой — если так и не продлил", Notice: true, Sub: true},
+	{Key: "before_end", Name: "До конца подписки", Hint: "за заданное время до конца подписки — срок считает сам бот", Sub: true},
+	{Key: "after_end", Name: "После конца подписки", Hint: "через заданное время после конца, если так и не продлил — срок считает сам бот", Sub: true},
+	{Key: "expiring", Name: "Напоминание панели о конце", Hint: "когда панель напоминает: за 3 дня и за 1 день (если включено в «Настроить → Напоминания клиентам»)", Notice: true, Sub: true},
+	{Key: "expired", Name: "Подписка закончилась (по панели)", Hint: "в день окончания, когда панель сообщает; с задержкой — если так и не продлил", Notice: true, Sub: true},
 	{Key: "traffic_90", Name: "Трафик на исходе", Hint: "израсходовано 90% трафика", Notice: true, Sub: true},
 	{Key: "traffic_100", Name: "Трафик закончился", Hint: "израсходован весь трафик", Notice: true, Sub: true},
 }
@@ -79,6 +92,51 @@ func TriggerOf(key string) (Trigger, bool) {
 		return Trigger{}, false
 	}
 	return Triggers[i], true
+}
+
+// BuiltinMsg is one of the bot's own messages, as the page lists them.
+type BuiltinMsg struct {
+	Key   string `json:"key"`
+	Group string `json:"group"`
+	Name  string `json:"name"`
+	Hint  string `json:"hint"`
+	// Vars are the variables its text may hold.
+	Vars string `json:"vars"`
+	// Panel: the standard text is the panel's (Настроить → Напоминания клиентам), which sends
+	// it only when it is on there.
+	Panel bool `json:"panel,omitempty"`
+}
+
+const (
+	varsPaid   = "{name} {tariff} {amount} {until} {days} {link} {first_name} {brand}"
+	varsRefund = "{name} {tariff} {amount} {until} {first_name} {brand}"
+	varsSub    = "{name} {tariff} {until} {days} {traffic} {left} {link} {first_name} {brand}"
+)
+
+// Builtins are the bot's own messages, in the order the page lists them.
+var Builtins = []BuiltinMsg{
+	{Key: "paid_new", Group: "Оплата", Name: "Новая подписка оплачена", Hint: "сразу после оплаты новой подписки", Vars: varsPaid},
+	{Key: "paid_renew", Group: "Оплата", Name: "Продление оплачено", Hint: "сразу после оплаты продления", Vars: varsPaid},
+	{Key: "paid_package", Group: "Оплата", Name: "Трафик оплачен", Hint: "сразу после оплаты пакета трафика; {tariff} — пакет", Vars: varsPaid},
+	{Key: "refunded_new", Group: "Возврат", Name: "Возврат новой подписки", Hint: "подписка отключена", Vars: varsRefund},
+	{Key: "refunded_renew", Group: "Возврат", Name: "Возврат продления", Hint: "срок подписки уменьшен", Vars: varsRefund},
+	{Key: "refunded_package", Group: "Возврат", Name: "Возврат пакета трафика", Hint: "{tariff} — пакет", Vars: varsRefund},
+	{Key: "refunded_gone", Group: "Возврат", Name: "Возврат, подписки уже нет", Hint: "подписку удалили до возврата", Vars: "{tariff} {amount} {first_name} {brand}"},
+	{Key: "trial_not_given", Group: "Возврат", Name: "Пробный период не выдан", Hint: "оплатил пробный, но выдать нельзя (уже брал); деньги вернут вручную", Vars: "{amount} {first_name} {brand}"},
+	{Key: "expire_3d", Group: "Напоминания панели", Name: "Скоро конец: за 3 дня", Hint: "когда панель напоминает за 3 дня", Vars: varsSub, Panel: true},
+	{Key: "expire_1d", Group: "Напоминания панели", Name: "Скоро конец: за 1 день", Hint: "когда панель напоминает за 1 день", Vars: varsSub, Panel: true},
+	{Key: "expired", Group: "Напоминания панели", Name: "Подписка закончилась", Hint: "в день окончания", Vars: varsSub, Panel: true},
+	{Key: "traffic_90", Group: "Напоминания панели", Name: "Трафик на исходе", Hint: "израсходовано 90%", Vars: varsSub, Panel: true},
+	{Key: "traffic_100", Group: "Напоминания панели", Name: "Трафик закончился", Hint: "израсходован весь", Vars: varsSub, Panel: true},
+}
+
+// BuiltinOf is the bot's own message of key.
+func BuiltinOf(key string) (BuiltinMsg, bool) {
+	i := slices.IndexFunc(Builtins, func(b BuiltinMsg) bool { return b.Key == key })
+	if i < 0 {
+		return BuiltinMsg{}, false
+	}
+	return Builtins[i], true
 }
 
 // Limits of the automatic messages.
@@ -98,10 +156,31 @@ func (a *Auto) Normalize() {
 	if a.Rules == nil {
 		a.Rules = []Rule{}
 	}
+	for k, b := range a.Builtin {
+		b.Message.Normalize()
+		if _, ok := BuiltinOf(k); !ok || b.Mode == "" {
+			delete(a.Builtin, k) // the standard one needs no entry
+			continue
+		}
+		a.Builtin[k] = b
+	}
+	if len(a.Builtin) == 0 {
+		a.Builtin = nil
+	}
 	for i := range a.Rules {
 		r := &a.Rules[i]
 		r.ID, r.Name, r.Trigger = strings.TrimSpace(r.ID), strings.TrimSpace(r.Name), strings.TrimSpace(r.Trigger)
 		r.Message.Normalize()
+		var tariffs []string
+		for _, t := range r.Tariffs {
+			if t = strings.TrimSpace(t); t != "" && !slices.Contains(tariffs, t) {
+				tariffs = append(tariffs, t)
+			}
+		}
+		r.Tariffs = tariffs
+		if tr, ok := TriggerOf(r.Trigger); ok && !tr.Sub {
+			r.Tariffs = nil
+		}
 		if r.Trigger != "expiring" {
 			r.Days = 0
 		}
@@ -125,9 +204,24 @@ func (a *Auto) Valid() error {
 	if len(a.Rules) > MaxRules {
 		return &FieldError{"rules", fmt.Sprintf("автосообщений не больше %d", MaxRules)}
 	}
+	for k, b := range a.Builtin {
+		m, _ := BuiltinOf(k)
+		switch b.Mode {
+		case "off":
+		case "own":
+			if err := b.Message.Valid("builtin."+k+".message", "сообщение «"+m.Name+"»"); err != nil {
+				return err
+			}
+		default:
+			return &FieldError{"builtin." + k + ".mode", "сообщение «" + m.Name + "»: стандартное, своё или не отправлять"}
+		}
+	}
 	ids := map[string]bool{}
 	for i, r := range a.Rules {
 		f := fmt.Sprintf("rules.%d", i)
+		if len(r.Tariffs) > 20 {
+			return &FieldError{f + ".tariffs", "не больше 20 тарифов в условии"}
+		}
 		where := "автосообщение «" + cmpOr(r.Name, r.ID) + "»"
 		switch {
 		case !ruleID.MatchString(r.ID):

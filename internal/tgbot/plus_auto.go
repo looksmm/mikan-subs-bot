@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,14 +86,20 @@ func (b *Bot) autoTick(ctx context.Context) {
 		}
 		b.sendDue(ctx, r, it)
 	}
-	var own []plus.Rule
+	var own, ends []plus.Rule
 	for _, r := range a.Rules {
-		if r.On && (r.Trigger == "start" || r.Trigger == "no_sub") {
+		switch {
+		case r.On && (r.Trigger == "start" || r.Trigger == "no_sub"):
 			own = append(own, r)
+		case r.On && (r.Trigger == "before_end" || r.Trigger == "after_end"):
+			ends = append(ends, r)
 		}
 	}
 	if len(own) > 0 {
 		b.ownTriggers(ctx, own, now)
+	}
+	if len(ends) > 0 {
+		b.endTriggers(ctx, ends, now)
 	}
 	b.x.auto.mu.Lock()
 	forget := now.Sub(b.x.auto.forgot) > 24*time.Hour
@@ -99,7 +108,18 @@ func (b *Bot) autoTick(ctx context.Context) {
 	}
 	b.x.auto.mu.Unlock()
 	if forget {
-		e.Chats.Forget(func(rule string) bool { _, ok := a.Rule(rule); return ok })
+		// A mark is the rule's id, or "<rule>:<subscription>" for the terms the bot counts.
+		e.Chats.Forget(func(mark string) bool { id, _, _ := strings.Cut(mark, ":"); _, ok := a.Rule(id); return ok })
+		if e.Stats != nil {
+			e.Stats.Forget(func(key string) bool {
+				kind, id, _ := strings.Cut(key, ".")
+				if kind != "r" {
+					return true
+				}
+				_, ok := a.Rule(id)
+				return ok
+			})
+		}
 	}
 }
 
@@ -171,7 +191,7 @@ func (b *Bot) ownTriggers(ctx context.Context, rules []plus.Rule, now time.Time)
 			}
 		}
 		e.Chats.MarkSent(s.tg, s.r.ID, t)
-		pm := b.prepareMsg(ctx, s.r.Message)
+		pm := b.prepareMsg(ctx, s.r.Message, "r."+s.r.ID)
 		b.queueAdmin(s.tg, pm, b.autoVars(ctx, wordsFor(b.config(ctx).Lang), pm.brand, s.tg, nil, nil), false, "notice", nil)
 	}
 }
@@ -217,6 +237,8 @@ func (b *Bot) autoEvent(ctx context.Context, e events.Event, u db.User) (replace
 			continue
 		case trig == "paid" && r.First && kind != "new":
 			continue
+		case len(r.Tariffs) > 0 && !slices.Contains(r.Tariffs, eventTariff(ctx, b, e, u)):
+			continue
 		case !e.At.IsZero() && e.At.Unix() < r.Created:
 			continue // happened before the rule was made
 		}
@@ -230,7 +252,7 @@ func (b *Bot) autoEvent(ctx context.Context, e events.Event, u db.User) (replace
 			chats.AddDue(e.TgID, plus.Due{Rule: r.ID, At: now.Add(time.Duration(r.Delay) * time.Minute).Unix(), User: e.UserID, Event: e.ID})
 			continue
 		}
-		pm := b.prepareMsg(ctx, r.Message)
+		pm := b.prepareMsg(ctx, r.Message, "r."+r.ID)
 		b.queueAdmin(e.TgID, pm, b.autoVars(ctx, wordsFor(b.config(ctx).Lang), pm.brand, e.TgID, &u, nil), u.ID != 0, "notice", nil)
 	}
 	return replace
@@ -257,6 +279,9 @@ func (b *Bot) sendDue(ctx context.Context, r plus.Rule, it plus.DueItem) {
 			return
 		}
 	}
+	if sub != nil && len(r.Tariffs) > 0 && !slices.Contains(r.Tariffs, sub.TariffName) {
+		return
+	}
 	if sub != nil {
 		switch r.Trigger {
 		case "expired":
@@ -269,7 +294,7 @@ func (b *Bot) sendDue(ctx context.Context, r plus.Rule, it plus.DueItem) {
 			}
 		}
 	}
-	pm := b.prepareMsg(ctx, r.Message)
+	pm := b.prepareMsg(ctx, r.Message, "r."+r.ID)
 	b.queueAdmin(it.TgID, pm, b.autoVars(ctx, wordsFor(b.config(ctx).Lang), pm.brand, it.TgID, nil, sub), sub != nil && sub.Works(), "notice", nil)
 }
 
@@ -291,17 +316,18 @@ func (b *Bot) autoVars(ctx context.Context, w *words, brand string, tg int64, u 
 // broadcast to thousands asks the panel nothing per message.
 type adminMsg struct {
 	m     plus.Message
+	tag   string // the message's name in the counts: r.<rule>, m.<key>, b.<job>
 	brand string
 	quiet bool               // the panel's quiet night
 	kb    [2]*tgate.Keyboard // [0] without a subscription, [1] with one
 }
 
-func (b *Bot) prepareMsg(ctx context.Context, m plus.Message) adminMsg {
+func (b *Bot) prepareMsg(ctx context.Context, m plus.Message, tag string) adminMsg {
 	cfg := b.config(ctx)
 	w := wordsFor(cfg.Lang)
-	pm := adminMsg{m: m, brand: b.brand(ctx), quiet: cfg.QuietNight}
+	pm := adminMsg{m: m, tag: tag, brand: b.brand(ctx), quiet: cfg.QuietNight}
 	for i, s := range []subsOf{{}, {ok: true, n: 1}} {
-		if rows := b.actionRows(ctx, cfg, w, 0, m.Rows, "", true, s); len(rows) > 0 {
+		if rows := b.actionRows(ctx, cfg, w, 0, m.Rows, "", true, tag, s); len(rows) > 0 {
 			pm.kb[i] = &tgate.Keyboard{InlineKeyboard: rows}
 		}
 	}
@@ -327,11 +353,19 @@ func (b *Bot) queueAdmin(chat int64, pm adminMsg, vars map[string]string, withSu
 		_, err := c.Send(ctx, chat, text, kb, silent)
 		return err
 	}
+	counted := func(err error) {
+		if err == nil && b.x != nil && b.x.e.Stats != nil {
+			b.x.e.Stats.Sent(pm.tag)
+		}
+		if done != nil {
+			done(err)
+		}
+	}
 	if lane == "bulk" {
-		b.d.Outbox.Bulk(chat, send, done)
+		b.d.Outbox.Bulk(chat, send, counted)
 		return
 	}
-	b.d.Outbox.Notice(chat, send, done)
+	b.d.Outbox.Notice(chat, send, counted)
 }
 
 // msgVars are the variables of an admin's message to tg: the brand, the first name, and the
@@ -364,7 +398,7 @@ func (b *Bot) TestMessage(ctx context.Context, chat int64, m plus.Message) error
 			sub = pickSub(subs)
 		}
 	}
-	pm := b.prepareMsg(ctx, m)
+	pm := b.prepareMsg(ctx, m, "")
 	vars := b.msgVars(wordsFor(b.config(ctx).Lang), pm.brand, chat, sub)
 	b.queueAdmin(chat, pm, vars, sub != nil && sub.Works(), "", func(err error) { done <- err })
 	select {
@@ -386,4 +420,92 @@ var Vars = []struct {
 	{"tariff", "тариф (в автосообщениях о подписке)"},
 	{"until", "дата окончания"},
 	{"days", "сколько дней осталось"},
+}
+
+// eventTariff is the tariff an event is about: the payment's as paid, else the subscription's.
+func eventTariff(ctx context.Context, b *Bot, e events.Event, u db.User) string {
+	if e.Type == events.PaymentPaid {
+		var p events.Payment
+		if json.Unmarshal(e.Data, &p) == nil && p.TariffName != "" {
+			return p.TariffName
+		}
+	}
+	return b.tariffName(ctx, u.TariffID.Int64, u.TariffID.Valid)
+}
+
+// endTriggers sends the rules about the end of a subscription the bot counts itself, from the
+// panel's list of subscribers: some time before the end of a subscription that works, and some
+// time after the end of one that was not renewed. Once per rule, subscription and term; each
+// is asked about again before it goes, as the list may be minutes old.
+func (b *Bot) endTriggers(ctx context.Context, rules []plus.Rule, now time.Time) {
+	e := b.x.e
+	if e.Users == nil {
+		return
+	}
+	byTg, at, err := e.Users.Snapshot()
+	if err != nil || at.IsZero() {
+		b.x.auto.warn(b.d.Log, "auto: messages about the end of a subscription need the permission «Все пользователи»")
+		return
+	}
+	t := now.Unix()
+	w := wordsFor(b.config(ctx).Lang)
+	prepared := map[string]adminMsg{}
+	for tg, subs := range byTg {
+		if ch, ok := e.Chats.Get(tg); ok && ch.Blocked != 0 {
+			continue
+		}
+		for _, s := range subs {
+			if s.ExpiresAt == nil {
+				continue
+			}
+			exp := s.ExpiresAt.Unix()
+			for _, r := range rules {
+				if !endDue(r, s, exp, t) {
+					continue
+				}
+				key := r.ID + ":" + strconv.FormatInt(s.ID, 10)
+				if e.Chats.Sent(tg, key) == exp {
+					continue
+				}
+				// The list may be minutes old: renewed meanwhile, nothing to say.
+				fresh, err := e.Users.One(ctx, s.ID)
+				if err != nil {
+					continue
+				}
+				if fresh.ExpiresAt == nil || fresh.ExpiresAt.Unix() != exp || !endDue(r, fresh, exp, t) {
+					continue
+				}
+				e.Chats.MarkSent(tg, key, exp)
+				pm, ok := prepared[r.ID]
+				if !ok {
+					pm = b.prepareMsg(ctx, r.Message, "r."+r.ID)
+					prepared[r.ID] = pm
+				}
+				b.queueAdmin(tg, pm, b.msgVars(w, pm.brand, tg, &fresh), fresh.Works(), "notice", nil)
+			}
+		}
+	}
+}
+
+// endDue says whether rule r is due now (t) for subscription s ending at exp.
+func endDue(r plus.Rule, s plus.Sub, exp, t int64) bool {
+	if len(r.Tariffs) > 0 && !slices.Contains(r.Tariffs, s.TariffName) {
+		return false
+	}
+	var due int64
+	switch r.Trigger {
+	case "before_end":
+		due = exp - r.Delay*60
+		if t >= exp || !s.Works() {
+			return false
+		}
+	case "after_end":
+		due = exp + r.Delay*60
+		if s.Works() {
+			return false
+		}
+	default:
+		return false
+	}
+	return t >= due && due >= r.Created && t-due <= int64(staleDue/time.Second)
 }

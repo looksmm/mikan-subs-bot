@@ -280,10 +280,12 @@ func (b *Bot) paid(ctx context.Context, chat int64, p events.Payment, u db.User)
 		text = fmt.Sprintf(w.paidRenew, html.EscapeString(u.Name), html.EscapeString(until))
 	}
 	_ = b.d.Backend.SetCurrent(ctx, chat, u.ID)
-	b.d.Outbox.Notice(chat, func(ctx context.Context, c *tgate.Client) error {
-		_, err := c.Send(ctx, chat, text, nil, false)
-		return err
-	}, nil)
+	if !b.ownBuiltin(ctx, paidKey(p), chat, b.payVars(ctx, w, chat, p, u), true) { // plus: the admin's own, or none
+		b.d.Outbox.Notice(chat, func(ctx context.Context, c *tgate.Client) error {
+			_, err := c.Send(ctx, chat, text, nil, false)
+			return err
+		}, b.countBuiltin(paidKey(p)))
+	}
 	b.freshMenu(chat, "")
 }
 
@@ -306,10 +308,13 @@ func (b *Bot) refunded(ctx context.Context, chat int64, p events.Payment, u db.U
 		}
 		text = fmt.Sprintf(w.refundedRenew, html.EscapeString(p.TariffName), html.EscapeString(u.Name), html.EscapeString(until))
 	}
-	b.d.Outbox.Notice(chat, func(ctx context.Context, c *tgate.Client) error {
-		_, err := c.Send(ctx, chat, text, nil, false)
-		return err
-	}, nil)
+	key := refundKey(p, u)
+	if !b.ownBuiltin(ctx, key, chat, b.payVars(ctx, w, chat, p, u), u.ID != 0 && !p.Disabled) { // plus
+		b.d.Outbox.Notice(chat, func(ctx context.Context, c *tgate.Client) error {
+			_, err := c.Send(ctx, chat, text, nil, false)
+			return err
+		}, b.countBuiltin(key))
+	}
 	b.freshMenu(chat, "")
 }
 
@@ -390,8 +395,12 @@ func (b *Bot) trialNotGiven(ctx context.Context, chat int64, n events.NotGiven) 
 	if sup := b.supportURL(ctx); sup != "" {
 		kb = &tgate.Keyboard{InlineKeyboard: [][]tgate.Button{{{Text: w.support, URL: sup}}}}
 	}
+	vars := map[string]string{"amount": w.price(n.Amount, n.Currency), "first_name": b.firstName(chat)}
+	if b.ownBuiltin(ctx, "trial_not_given", chat, vars, false) { // plus: the admin's own, or none
+		return
+	}
 	b.d.Outbox.Notice(chat, func(ctx context.Context, c *tgate.Client) error {
 		_, err := c.Send(ctx, chat, text, kb, false)
 		return err
-	}, nil)
+	}, b.countBuiltin("trial_not_given"))
 }

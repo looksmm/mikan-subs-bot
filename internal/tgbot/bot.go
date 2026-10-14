@@ -74,6 +74,8 @@ func (b *Bot) Update(ctx context.Context, up tgate.Update) {
 			b.onTransfer(ctx, up.CallbackQuery)
 		} else if cmd == freshCode {
 			b.onFresh(ctx, up.CallbackQuery, rest) // plus: a button under the admin's message
+		} else if cmd == taggedCode {
+			b.onTagged(ctx, up.CallbackQuery, rest) // plus: the same, counted
 		} else {
 			b.onPress(ctx, up.CallbackQuery)
 		}

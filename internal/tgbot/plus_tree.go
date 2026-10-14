@@ -25,6 +25,9 @@ import (
 const (
 	treeCode  = "k"
 	freshCode = "kn"
+	// taggedCode is freshCode with the message it came from: kt:<tag>:<data>, the tag "r.<rule>",
+	// "m.<key>" or "b.<job>", for the counts of presses.
+	taggedCode = "kt"
 )
 
 // Extras are what the bot has besides the look: the admin's menu, the automatic messages,
@@ -35,6 +38,7 @@ type Extras struct {
 	Chats      *plus.Chats
 	Users      *plus.Users
 	Broadcasts *plus.Broadcasts
+	Stats      *plus.Stats
 }
 
 // PlusExtras turns the extras on; call it after Plus.
@@ -115,7 +119,7 @@ func (b *Bot) drawTree(ctx context.Context, cfg Config, w *words, chat int64, m 
 	if notice != "" {
 		out = html.EscapeString(notice) + "\n\n" + out
 	}
-	rows := b.actionRows(ctx, cfg, w, chat, sc.Rows, sc.ID, false, s)
+	rows := b.actionRows(ctx, cfg, w, chat, sc.Rows, sc.ID, false, "", s)
 	root := sc.ID == m.Main || sc.ID == m.Welcome
 	if sc.ID == m.Main && s.ok && s.count() > 1 && !hasDoing(sc.Rows, "subs") {
 		rows = append(rows, []tgate.Button{{Text: subsLabel(w, s.count()), CallbackData: "w"}})
@@ -171,13 +175,14 @@ func (b *Bot) firstName(chat int64) string {
 
 // actionRows are the admin's buttons as Telegram's: a button that has nothing to do for this
 // chat now (the trial taken, no subscription to show) is left out, and an empty row with it.
-// fresh: the buttons sit under a message of the admin's and open their screen as a new menu.
-func (b *Bot) actionRows(ctx context.Context, cfg Config, w *words, chat int64, rows [][]plus.Action, cur string, fresh bool, s subsOf) [][]tgate.Button {
+// fresh: the buttons sit under a message of the admin's and open their screen as a new menu;
+// tag names that message for the counts of presses.
+func (b *Bot) actionRows(ctx context.Context, cfg Config, w *words, chat int64, rows [][]plus.Action, cur string, fresh bool, tag string, s subsOf) [][]tgate.Button {
 	var out [][]tgate.Button
 	for _, r := range rows {
 		var row []tgate.Button
 		for _, a := range r {
-			if btn, ok := b.actionButton(ctx, cfg, w, chat, a, cur, fresh, s); ok {
+			if btn, ok := b.actionButton(ctx, cfg, w, chat, a, cur, fresh, tag, s); ok {
 				row = append(row, btn)
 			}
 		}
@@ -192,7 +197,7 @@ func (b *Bot) actionRows(ctx context.Context, cfg Config, w *words, chat int64, 
 // there now. Under a message of the admin's (fresh) what only the panel can tell of an account
 // that is not in the chat (the trial, the free plan, the packages) is not asked: the screen
 // says it when the button is pressed.
-func (b *Bot) actionButton(ctx context.Context, cfg Config, w *words, chat int64, a plus.Action, cur string, fresh bool, s subsOf) (tgate.Button, bool) {
+func (b *Bot) actionButton(ctx context.Context, cfg Config, w *words, chat int64, a plus.Action, cur string, fresh bool, tag string, s subsOf) (tgate.Button, bool) {
 	btn := tgate.Button{Text: a.Label, Icon: a.Icon, Style: a.Style}
 	code := ""
 	switch a.Do {
@@ -278,7 +283,10 @@ func (b *Bot) actionButton(ctx context.Context, cfg Config, w *words, chat int64
 	default:
 		return btn, false
 	}
-	if fresh {
+	switch {
+	case fresh && tag != "":
+		code = taggedCode + ":" + tag + ":" + code
+	case fresh:
 		code = freshCode + ":" + code
 	}
 	btn.CallbackData = code
@@ -379,4 +387,13 @@ func (b *Bot) answerNow(ctx context.Context, id string) {
 			b.d.Log.Warn("telegram: a press was not answered", "err", err)
 		}
 	}
+}
+
+// onTagged is a press under a message of the admin's that names it: counted, then as onFresh.
+func (b *Bot) onTagged(ctx context.Context, q *tgate.CallbackQuery, rest string) {
+	tag, data, _ := strings.Cut(rest, ":")
+	if b.x != nil && b.x.e.Stats != nil {
+		b.x.e.Stats.Pressed(tag)
+	}
+	b.onFresh(ctx, q, data)
 }

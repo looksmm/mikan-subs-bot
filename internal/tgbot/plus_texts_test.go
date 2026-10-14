@@ -14,8 +14,8 @@ import (
 func withTexts(t *testing.T, texts map[string]string) *Bot {
 	t.Helper()
 	b := lookBot(t, func(s *plus.Settings) { s.Texts = texts })
-	wordsHook = b.x.words
-	t.Cleanup(func() { wordsHook = nil })
+	setWordsHook(b.x.words)
+	t.Cleanup(func() { setWordsHook(nil) })
 	return b
 }
 

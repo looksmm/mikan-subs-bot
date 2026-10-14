@@ -56,6 +56,10 @@ func (b *treeBackend) Chat(context.Context, int64) (db.TgChat, error) {
 }
 func (b *treeBackend) SetMenu(_ context.Context, _, msg int64) error { b.menu.Store(msg); return nil }
 func (*treeBackend) Context(context.Context, int64) (Account, error) { return Account{}, nil }
+func (*treeBackend) SetCurrent(context.Context, int64, int64) error  { return nil }
+func (*treeBackend) Tariff(_ context.Context, id int64) (db.Tariff, error) {
+	return db.Tariff{ID: id, Name: map[int64]string{1: "Стандарт", 2: "Премиум"}[id]}, nil
+}
 func (b *treeBackend) User(_ context.Context, id int64) (db.User, error) {
 	if u, ok := b.users[id]; ok {
 		return u, nil
@@ -384,7 +388,7 @@ func TestTreeDrawsTheAdminsMenu(t *testing.T) {
 		t.Fatalf("welcome with a trial: %s", got)
 	}
 	// Under a message of the admin's the buttons open a new menu; a customer gets no trial.
-	rows := e.b.actionRows(ctx, cfg, w, 7, treeMenu().Screens[3].Rows, "", true, sub)
+	rows := e.b.actionRows(ctx, cfg, w, 7, treeMenu().Screens[3].Rows, "", true, "", sub)
 	if got := strings.Join(codes(&tgate.Keyboard{InlineKeyboard: rows}), " "); got != "kn:b kn:s kn:k:help" {
 		t.Fatalf("fresh: %s", got)
 	}
@@ -460,7 +464,7 @@ func TestAutoMessagesOfTheBot(t *testing.T) {
 	}
 	// The buttons open a new menu; a customer gets no «Купить» (buy opens to everyone).
 	kb := e.tg.to(12)[0]["reply_markup"].(map[string]any)["inline_keyboard"].([]any)
-	if btn := kb[0].([]any)[0].(map[string]any); btn["callback_data"] != "kn:b" {
+	if btn := kb[0].([]any)[0].(map[string]any); btn["callback_data"] != "kt:r.hi:b" {
 		t.Fatalf("button: %+v", btn)
 	}
 	e.b.autoTick(ctx)
@@ -708,6 +712,135 @@ func TestPressesAreAnsweredOnce(t *testing.T) {
 	for id, n := range e.tg.answers {
 		if n != 1 {
 			t.Errorf("press %s answered %d times", id, n)
+		}
+	}
+}
+
+// The bot's own messages as the admin set them: their own text and buttons, none, or the
+// standard one; each counted, and so are the presses of their buttons.
+func TestBuiltinMessages(t *testing.T) {
+	e := newExtras(t)
+	ctx := context.Background()
+	e.ex.Stats = plus.NewStats(nil, slog.New(slog.NewTextHandler(io.Discard, nil)), e.now)
+	e.b.x.e.Stats = e.ex.Stats
+	e.ex.Chats.Seen(21, "Аня", true)
+	exp := e.now().Add(30 * 24 * time.Hour)
+	e.be.users[210] = db.User{ID: 210, Name: "Аня-1", TariffID: sql.NullInt64{Int64: 1, Valid: true}, ExpiresAt: sql.NullInt64{Int64: exp.Unix(), Valid: true}}
+	e.ex.Auto.Use(plus.Auto{Builtin: map[string]plus.Builtin{
+		"paid_new": {Mode: "own", Message: plus.Message{Text: "Спасибо, {first_name}! {tariff} за {amount} до {until}. Ссылка: {link}",
+			Rows: [][]plus.Action{{{Label: "Подключить", Do: "connect"}}}}},
+		"expired": {Mode: "off"},
+	}})
+	paid := events.Event{ID: 1, Type: events.PaymentPaid, At: e.now(), UserID: 210, TgID: 21,
+		Data: json.RawMessage(`{"kind":"new","created":true,"amount":19900,"currency":"RUB","tariff_name":"Стандарт"}`)}
+	if err := e.b.HandleEvent(ctx, paid); err != nil {
+		t.Fatal(err)
+	}
+	e.wait("the admin's payment message", func() bool {
+		for _, m := range e.tg.to(21) {
+			if strings.HasPrefix(textOf(m), "Спасибо, Аня!") {
+				return true
+			}
+		}
+		return false
+	})
+	var own map[string]any
+	for _, m := range e.tg.to(21) {
+		if strings.HasPrefix(textOf(m), "Спасибо") {
+			own = m
+		}
+		if strings.Contains(textOf(m), "оплачен") || strings.Contains(textOf(m), "Оплата") {
+			t.Fatalf("the standard payment message went too: %q", textOf(m))
+		}
+	}
+	if got := textOf(own); got != "Спасибо, Аня! Стандарт за 199 ₽ до "+wordsFor("ru").date(exp.UTC())+". Ссылка: https://sub.example.com/s/abc" {
+		t.Fatalf("text: %q", got)
+	}
+	btn := own["reply_markup"].(map[string]any)["inline_keyboard"].([]any)[0].([]any)[0].(map[string]any)
+	if btn["callback_data"] != "kt:m.paid_new:c" {
+		t.Fatalf("button: %+v", btn)
+	}
+	// Off: nothing at all. Standard: the panel's notice, counted.
+	before := len(e.tg.to(21))
+	if err := e.b.HandleEvent(ctx, events.Event{ID: 2, Type: events.UserExpired, At: e.now(), UserID: 210, TgID: 21}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.b.HandleEvent(ctx, events.Event{ID: 3, Type: events.Traffic90, At: e.now(), UserID: 210, TgID: 21}); err != nil {
+		t.Fatal(err)
+	}
+	e.wait("the traffic notice", func() bool { return len(e.tg.to(21)) >= before+1 })
+	time.Sleep(150 * time.Millisecond)
+	if got := len(e.tg.to(21)) - before; got != 1 {
+		t.Fatalf("after an off and a standard notice: %d messages", got)
+	}
+	// The press of the admin's button: counted, and it opens the screen.
+	e.b.Update(ctx, tgate.Update{UpdateID: 9, CallbackQuery: &tgate.CallbackQuery{ID: "p1", From: tgate.User{ID: 21}, Data: "kt:m.paid_new:c",
+		Message: &tgate.Message{MessageID: 5, Chat: tgate.Chat{ID: 21, Type: "private"}}}})
+	e.wait("the counts", func() bool {
+		c := e.ex.Stats.All()
+		return c["m.paid_new"].Sent == 1 && c["m.paid_new"].Presses == 1 && c["m.traffic_90"].Sent == 1
+	})
+	if c := e.ex.Stats.All(); c["m.expired"].Sent != 0 {
+		t.Fatalf("an off message counted: %+v", c)
+	}
+}
+
+// The end of a subscription by the bot's own clock: some time before it, some time after an
+// end that was not renewed; once per term, and only for the tariffs a rule names.
+func TestEndOfTermRules(t *testing.T) {
+	e := newExtras(t)
+	ctx := context.Background()
+	msg := func(text string) plus.Message { return plus.Message{Text: text} }
+	created := e.now().Add(-30 * 24 * time.Hour).Unix()
+	e.ex.Auto.Use(plus.Auto{Rules: []plus.Rule{
+		{ID: "soon", On: true, Trigger: "before_end", Delay: 3 * 24 * 60, Message: msg("{name}: осталось {days}"), Created: created},
+		{ID: "back", On: true, Trigger: "after_end", Delay: 12 * 60, Message: msg("Вернитесь, {name}"), Created: created},
+		{ID: "prem", On: true, Trigger: "before_end", Delay: 3 * 24 * 60, Tariffs: []string{"Премиум"}, Message: msg("премиум"), Created: created},
+	}})
+	sub := func(id int64, state string, tg int64, exp time.Time) plus.Sub {
+		s := subOf(id, "sub-"+strconv.FormatInt(id, 10), state, tg, exp)
+		return s
+	}
+	e.users.set(
+		sub(31, "expiring", 301, e.now().Add(2*24*time.Hour)),  // ends in 2 days: «soon»
+		sub(32, "active", 302, e.now().Add(10*24*time.Hour)),   // ends in 10 days: nothing yet
+		sub(33, "expired", 303, e.now().Add(-13*time.Hour)),    // ended 13 h ago: «back»
+		sub(34, "expired", 304, e.now().Add(-1*time.Hour)),     // ended 1 h ago: not yet
+		sub(35, "expired", 305, e.now().Add(-40*24*time.Hour)), // long ago, before the rule: never
+	)
+	if err := e.ex.Users.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.b.autoTick(ctx)
+	e.wait("the end messages", func() bool { return len(e.tg.to(301)) == 1 && len(e.tg.to(303)) == 1 })
+	time.Sleep(150 * time.Millisecond)
+	if got := textOf(e.tg.to(301)[0]); !strings.HasPrefix(got, "sub-31: осталось") {
+		t.Fatalf("soon: %q", got)
+	}
+	if got := textOf(e.tg.to(303)[0]); got != "Вернитесь, sub-33" {
+		t.Fatalf("back: %q", got)
+	}
+	for _, tg := range []int64{302, 304, 305} {
+		if n := len(e.tg.to(tg)); n != 0 {
+			t.Fatalf("%d got %d", tg, n)
+		}
+	}
+	// Once per term.
+	e.b.autoTick(ctx)
+	time.Sleep(150 * time.Millisecond)
+	if len(e.tg.to(301)) != 1 || len(e.tg.to(303)) != 1 {
+		t.Fatal("sent twice")
+	}
+	// Renewed: a new term, a new reminder when its time comes; the «Премиум» rule never for «Стандарт».
+	e.users.set(sub(31, "active", 301, e.now().Add(32*24*time.Hour)))
+	_ = e.ex.Users.Refresh(ctx)
+	e.move(30 * 24 * time.Hour)
+	e.b.autoTick(ctx)
+	e.wait("the next term's reminder", func() bool { return len(e.tg.to(301)) == 2 })
+	time.Sleep(150 * time.Millisecond)
+	for _, m := range e.tg.to(301) {
+		if textOf(m) == "премиум" {
+			t.Fatal("a rule for another tariff went")
 		}
 	}
 }

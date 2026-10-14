@@ -135,13 +135,17 @@ window.X = (() => {
     return el("div", { class: "tg" }, bubble, kb.childElementCount ? kb : null);
   }
 
-  function varsHint() {
+  // varsHint lists the variables; own is a message's own list ("{name} {tariff} …").
+  function varsHint(own) {
+    const hints = Object.fromEntries((view.vars || []).map((v) => [v.key, v.hint]));
+    Object.assign(hints, { amount: "сумма оплаты", link: "ссылка подписки", traffic: "трафик", left: "осталось трафика", package: "пакет" });
+    const list = own ? own.split(/\s+/).filter(Boolean).map((x) => x.replace(/[{}]/g, "")) : (view.vars || []).map((v) => v.key);
     return el("small", { class: "muted" }, "Разметка: **жирный**, __курсив__, `код`. Переменные: ",
-      ...(view.vars || []).flatMap((v, i) => [i ? ", " : "", el("span", { class: "code", text: "{" + v.key + "}" }), " " + v.hint]));
+      ...list.flatMap((k, i) => [i ? ", " : "", el("span", { class: "code", text: "{" + k + "}" }), hints[k] ? " " + hints[k] : ""]));
   }
 
   // messageEditor edits m (text, picture, buttons) with a preview and «Отправить себе».
-  function messageEditor(m, changed) {
+  function messageEditor(m, changed, vars) {
     const text = el("textarea", { rows: "5", spellcheck: "false", placeholder: "Текст сообщения" });
     text.value = m.text || "";
     const photo = el("input", { type: "text", spellcheck: "false", placeholder: "https://… адрес картинки (необязательно)", value: m.photo || "" });
@@ -171,11 +175,19 @@ window.X = (() => {
     redraw();
     return el("div", { class: "msg-edit" },
       el("div", { class: "msg-fields" },
-        el("div", { class: "field" }, el("label", { text: "Текст" }), text, el("div", { class: "row between wrap" }, varsHint(), count)),
+        el("div", { class: "field" }, el("label", { text: "Текст" }), text, el("div", { class: "row between wrap" }, varsHint(vars), count)),
         el("div", { class: "field" }, el("label", { text: "Картинка" }), photo, el("small", { class: "muted", text: "Telegram загрузит её по адресу. С картинкой текст — до 1000 символов." })),
         el("div", { class: "field" }, el("label", { text: "Кнопки" }), rowsEditor(m.rows, edit)),
         el("div", { class: "row wrap" }, test, testState)),
       el("div", { class: "msg-pv" }, el("div", { class: "muted small", text: "Как увидит подписчик" }), pv));
+  }
+
+  // ---- the counts ----
+
+  function countText(key) {
+    const c = (view.stats || {})[key];
+    if (!c || (!c.sent && !c.presses)) return "";
+    return "отправлено " + c.sent + (c.presses ? " · нажали кнопки " + c.presses : "");
   }
 
   // ---- the menu ----
@@ -281,18 +293,86 @@ window.X = (() => {
     for (const [k] of [...units].reverse()) if (min % Number(k) === 0) return [min / Number(k), k];
     return [min, "1"];
   }
-  function delayText(min) {
-    if (!min) return "сразу";
+  function delayText(min, trigger) {
+    if (!min) return trigger === "before_end" ? "в момент окончания" : trigger === "after_end" ? "сразу после конца" : "сразу";
     const [n, u] = delayParts(min);
-    return "через " + n + " " + units.find((x) => x[0] === u)[1].replace("минут", "мин").replace("часов", "ч").replace("дней", "дн");
+    const t = n + " " + units.find((x) => x[0] === u)[1].replace("минут", "мин").replace("часов", "ч").replace("дней", "дн");
+    return trigger === "before_end" ? "за " + t + " до конца" : trigger === "after_end" ? "через " + t + " после конца" : "через " + t;
   }
 
   function renderAuto() {
+    const bx = $("builtins");
+    bx.replaceChildren();
+    let group = "";
+    for (const m of view.builtins || []) {
+      if (m.group !== group) {
+        group = m.group;
+        bx.append(el("div", { class: "icon-group", text: group }));
+      }
+      bx.append(builtinCard(m));
+    }
     const box = $("rules");
     box.replaceChildren();
     for (const r of auto.rules) box.append(ruleCard(r));
-    if (!auto.rules.length) box.append(el("p", { class: "empty", text: "Автосообщений нет." }));
+    if (!auto.rules.length) box.append(el("p", { class: "empty", text: "Своих автосообщений нет." }));
     $("rule-add").disabled = false;
+  }
+
+  // builtinCard is one of the bot's own messages: the standard one, the admin's, or none.
+  function builtinCard(m) {
+    const cur = () => (auto.builtin || {})[m.key] || { mode: "" };
+    const det = el("details", { class: "card" });
+    det.open = openRules.has("m." + m.key);
+    det.addEventListener("toggle", () => { if (det.open) openRules.add("m." + m.key); else openRules.delete("m." + m.key); });
+    const modeName = { "": "стандартное", own: "своё", off: "не отправляется" };
+    const badge = el("span", { class: "pill" });
+    const drawBadge = () => {
+      const mode = cur().mode || "";
+      badge.textContent = modeName[mode];
+      badge.className = "pill" + (mode === "own" ? " good" : mode === "off" ? " warn" : "");
+    };
+    drawBadge();
+    det.append(el("summary", {}, el("h3", { text: m.name }), badge, el("span", { class: "muted small", text: countText("m." + m.key) })));
+    const sel = el("select", { "aria-label": "Какое сообщение" });
+    for (const [k, n] of [["", "Стандартное"], ["own", "Своё"], ["off", "Не отправлять"]]) sel.append(el("option", { value: k, text: n }));
+    sel.value = cur().mode || "";
+    const body = el("div", { class: "rule-body" });
+    const draw = () => {
+      body.replaceChildren();
+      const mode = cur().mode || "";
+      if (m.panel) {
+        const on = (view.panel_notify || {})[m.key];
+        body.append(el("div", { class: "check " + (on ? "good" : "warn") + " small", text: on
+          ? "Панель присылает это событие: оно включено в «Настроить → Напоминания клиентам»."
+          : "В «Настроить → Напоминания клиентам» это напоминание выключено: панель о нём не сообщает, сообщение не придёт ни стандартное, ни своё." +
+            ({ expire_3d: " Свой срок можно задать ниже, в своих автосообщениях («До конца подписки»).", expire_1d: " Свой срок можно задать ниже, в своих автосообщениях («До конца подписки»).", expired: " Своё можно задать ниже, в своих автосообщениях («После конца подписки»)." }[m.key] || "") }));
+      }
+      if (mode === "") {
+        body.append(el("div", { class: "field" }, el("label", { text: "Стандартный текст" }),
+          el("div", { class: "std-text", text: ((view.builtin_defaults || {})[m.key] || "").replace(/\*\*/g, "") })));
+      } else if (mode === "off") {
+        body.append(el("p", { class: "muted small", text: "Это сообщение не отправляется вовсе." }));
+      } else {
+        const b = auto.builtin[m.key];
+        b.message = b.message || { text: "", rows: [] };
+        body.append(messageEditor(b.message, changed, m.vars));
+      }
+    };
+    sel.addEventListener("change", () => {
+      if (sel.value) {
+        auto.builtin = auto.builtin || {};
+        const was = auto.builtin[m.key];
+        auto.builtin[m.key] = { mode: sel.value, message: (was && was.message) || { text: "", rows: [] } };
+      } else if (auto.builtin) {
+        delete auto.builtin[m.key];
+        if (!Object.keys(auto.builtin).length) delete auto.builtin;
+      }
+      drawBadge(); draw(); changed();
+    });
+    draw();
+    det.append(el("div", { class: "rule-body" },
+      el("div", { class: "field narrow" }, el("label", { text: m.hint }), sel), body));
+    return det;
   }
 
   function ruleCard(r) {
@@ -306,9 +386,9 @@ window.X = (() => {
     on.addEventListener("change", () => { r.on = on.checked; changed(); });
     const title = el("h3", { text: r.name || "Без названия" });
     const when = el("span", { class: "muted small" });
-    const sum = () => { const t = trig(r.trigger); when.textContent = (t ? t.name : "?") + " · " + delayText(r.delay); };
+    const sum = () => { const t = trig(r.trigger); when.textContent = (t ? t.name : "?") + " · " + delayText(r.delay, r.trigger) + ((r.tariffs || []).length && t && t.sub ? " · " + r.tariffs.join(", ") : ""); };
     sum();
-    det.append(el("summary", {}, el("label", { class: "switch" }, on), title, when));
+    det.append(el("summary", {}, el("label", { class: "switch" }, on), title, when, el("span", { class: "muted small", text: countText("r." + r.id) })));
     const name = el("input", { type: "text", maxlength: "60", placeholder: "Название (видно только вам)", value: r.name || "" });
     name.addEventListener("input", () => { r.name = name.value; title.textContent = r.name || "Без названия"; changed(); });
     const tsel = el("select");
@@ -328,6 +408,26 @@ window.X = (() => {
     const replace = el("input", { type: "checkbox" });
     replace.checked = !!r.replace;
     const daysF = el("div", { class: "field" }, el("label", { text: "Когда напоминает панель" }), days);
+    const delayLabel = el("label", { text: "Задержка" });
+    const delayHint = el("small", { class: "muted", text: "0 — сразу. До 60 дней." });
+    // The condition: only subscriptions of these tariffs.
+    const tariffBox = el("div", { class: "tariffs" });
+    for (const name of new Set([...(view.tariffs || []), ...(r.tariffs || [])])) {
+      const c = el("input", { type: "checkbox" });
+      c.checked = (r.tariffs || []).includes(name);
+      c.addEventListener("change", () => {
+        const set = new Set(r.tariffs || []);
+        if (c.checked) set.add(name); else set.delete(name);
+        r.tariffs = [...set];
+        if (!r.tariffs.length) delete r.tariffs;
+        sum();
+        changed();
+      });
+      tariffBox.append(el("label", { class: "switch" }, c, el("span", { text: name })));
+    }
+    const tariffF = el("div", { class: "field" }, el("label", { text: "Только для тарифов (ничего не отмечено — для всех)" }),
+      tariffBox.childElementCount ? tariffBox : el("small", { class: "muted", text: "Тарифы появятся, когда бот прочитает подписчиков панели." }));
+    const panelWarn = el("div", { class: "check warn small" });
     const firstF = el("label", { class: "switch" }, first, el("span", { text: "Только после первой покупки подписки" }));
     const replF = el("label", { class: "switch" }, replace, el("span", { text: "Вместо уведомления панели (стандартное не придёт)" }));
     const needs = el("div", { class: "check warn small" });
@@ -343,11 +443,17 @@ window.X = (() => {
       put("first", r.trigger === "paid" && first.checked);
       put("replace", !!t.notice && replace.checked);
       thint.textContent = t.hint || "";
+      delayLabel.textContent = r.trigger === "before_end" ? "За сколько до конца" : r.trigger === "after_end" ? "Через сколько после конца" : "Задержка";
+      delayHint.textContent = r.trigger === "before_end" || r.trigger === "after_end" ? "До 60 дней. Бот проверяет срок по списку подписчиков панели." : "0 — сразу. До 60 дней.";
+      tariffF.hidden = !t.sub;
+      const pn = view.panel_notify || {};
+      panelWarn.hidden = !((r.trigger === "before_end" && (pn.expire_3d || pn.expire_1d)) || (r.trigger === "after_end" && pn.expired));
+      panelWarn.textContent = "В «Настроить → Напоминания клиентам» панель тоже присылает напоминание о конце подписки — выключите его там или выберите «Не отправлять» в «Сообщениях бота» выше, чтобы не приходило два сообщения.";
       daysF.hidden = r.trigger !== "expiring";
       firstF.hidden = r.trigger !== "paid";
       replF.hidden = !t.notice;
       const missing = (view.missing || []).includes("users:all");
-      needs.hidden = !(missing && (r.trigger === "no_sub" || (r.delay > 0 && (r.trigger === "expired" || r.trigger === "expiring"))));
+      needs.hidden = !(missing && (r.trigger === "no_sub" || r.trigger === "before_end" || r.trigger === "after_end" || (r.delay > 0 && (r.trigger === "expired" || r.trigger === "expiring"))));
       needs.textContent = "Нужно право аддона «Все пользователи»: без него бот не узнает, оформил ли человек подписку или продлил ли её.";
       sum();
       changed();
@@ -364,8 +470,8 @@ window.X = (() => {
       el("div", { class: "rule-when" },
         el("div", { class: "field" }, el("label", { text: "Название" }), name),
         el("div", { class: "field" }, el("label", { text: "После чего" }), tsel, thint),
-        el("div", { class: "field" }, el("label", { text: "Задержка" }), el("div", { class: "row" }, dnum, dunit), el("small", { class: "muted", text: "0 — сразу. До 60 дней." })),
-        daysF, firstF, replF, needs),
+        el("div", { class: "field" }, delayLabel, el("div", { class: "row" }, dnum, dunit), delayHint),
+        daysF, firstF, replF, tariffF, needs, panelWarn),
       messageEditor(r.message, changed),
       el("div", { class: "row wrap" }, del)));
     return det;
@@ -412,7 +518,8 @@ window.X = (() => {
           el("b", { text: (x.state === "done" ? "✓ " : "✕ ") + audienceName(x.audience) }),
           el("span", { class: "muted small", text: ago(x.finished || x.created) })),
         el("div", { class: "muted small", text: x.state === "cancelled" && !x.started ? "отменена до начала" + (x.error ? ": " + x.error : "") :
-          `отправлено ${x.sent} из ${x.total} · заблокировали ${x.blocked} · не дошло ${x.failed}` + (x.state === "cancelled" ? " · остановлена" : "") }),
+          `отправлено ${x.sent} из ${x.total} · заблокировали ${x.blocked} · не дошло ${x.failed}` + (x.state === "cancelled" ? " · остановлена" : "") +
+          (((view.stats || {})["b." + x.id] || {}).presses ? " · нажали кнопки " + view.stats["b." + x.id].presses : "") }),
         el("div", { class: "small job-text", text: x.message.text })));
     }
     drawStart();

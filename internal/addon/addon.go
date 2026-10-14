@@ -59,6 +59,11 @@ type Deps struct {
 	Jobs  *plus.Broadcasts
 	// Vars are the variables of the admin's messages.
 	Vars any
+	// Stats are the counts of the admin's messages; BuiltinDefaults the standard texts of the
+	// bot's own messages; PanelNotify which reminders the panel sends.
+	Stats           *plus.Stats
+	BuiltinDefaults func(ctx context.Context) map[string]string
+	PanelNotify     func(ctx context.Context) map[string]bool
 }
 
 // Broadcaster is the bot's side of the broadcasts and of the test messages.
@@ -196,6 +201,13 @@ type statusView struct {
 	Missing []string `json:"missing"`
 	// Holder: the panel gave the bot to this addon; until then nothing reaches Telegram.
 	Holder bool `json:"holder"`
+
+	Builtins        []plus.BuiltinMsg     `json:"builtins"`
+	BuiltinDefaults map[string]string     `json:"builtin_defaults"`
+	PanelNotify     map[string]bool       `json:"panel_notify"`
+	Stats           map[string]plus.Count `json:"stats"`
+	// Tariffs are the tariffs the panel's subscribers have, for the rules' condition.
+	Tariffs []string `json:"tariffs"`
 }
 
 type chatsView struct {
@@ -231,6 +243,26 @@ func status(ctx context.Context, d Deps) statusView {
 		}
 	}
 	v.Doings, v.Triggers, v.Audiences, v.Vars = plus.Doings, plus.Triggers, plus.Audiences, d.Vars
+	v.Builtins, v.Stats, v.Tariffs = plus.Builtins, d.Stats.All(), []string{}
+	if d.BuiltinDefaults != nil {
+		bctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		v.BuiltinDefaults, v.PanelNotify = d.BuiltinDefaults(bctx), d.PanelNotify(bctx)
+		cancel()
+	}
+	if d.Users != nil {
+		if byTg, _, err := d.Users.Snapshot(); err == nil {
+			seen := map[string]bool{}
+			for _, subs := range byTg {
+				for _, s := range subs {
+					if s.TariffName != "" && !seen[s.TariffName] {
+						seen[s.TariffName] = true
+						v.Tariffs = append(v.Tariffs, s.TariffName)
+					}
+				}
+			}
+			slices.Sort(v.Tariffs)
+		}
+	}
 	v.Holder = true
 	if d.Bot != nil {
 		hctx, cancel := context.WithTimeout(ctx, 5*time.Second)

@@ -49,9 +49,10 @@ func (a *addon) plus(ac access, page pageConf) {
 		Chats:      plus.NewChats(kv, a.log, time.Now),
 		Users:      plus.NewUsers(ac.panelURL, ac.panelToken, a.log),
 		Broadcasts: plus.NewBroadcasts(kv),
+		Stats:      plus.NewStats(kv, a.log, time.Now),
 	}
 	a.bot.PlusExtras(ex)
-	a.extra = append(a.extra, set.Run, ex.Menu.Run, ex.Auto.Run, ex.Chats.Run, a.bot.AutoRun, a.bot.BroadcastRun,
+	a.extra = append(a.extra, set.Run, ex.Menu.Run, ex.Auto.Run, ex.Chats.Run, ex.Stats.Run, a.bot.AutoRun, a.bot.BroadcastRun,
 		func(ctx context.Context) {
 			// The panel's subscribers every ten minutes: who has a subscription, for the
 			// broadcasts; and their accounts join the list of chats.
@@ -72,7 +73,8 @@ func (a *addon) plus(ac access, page pageConf) {
 		MenuButtons: a.bot.MenuButtons, Refused: a.bot.LastRefused, Texts: tgbot.TextEntries,
 		Saved:     func(ctx context.Context) { _ = a.bot.Started(ctx) },
 		AboutText: tgbot.DefaultAboutText,
-		Menu:      ex.Menu, Auto: ex.Auto, Chats: ex.Chats, Users: ex.Users, Bot: a.bot, Jobs: ex.Broadcasts, Vars: tgbot.Vars}
+		Menu:      ex.Menu, Auto: ex.Auto, Chats: ex.Chats, Users: ex.Users, Bot: a.bot, Jobs: ex.Broadcasts, Vars: tgbot.Vars,
+		Stats: ex.Stats, BuiltinDefaults: a.bot.BuiltinDefaults, PanelNotify: a.bot.PanelNotify}
 	a.extra = append(a.extra, func(ctx context.Context) {
 		if err := addonpage.Serve(ctx, page.listen, d); err != nil {
 			a.log.Error("the settings page", "listen", page.listen, "err", err)
