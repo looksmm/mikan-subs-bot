@@ -550,6 +550,28 @@ window.X = (() => {
     const r = { id: newID(), name: "Новое автосообщение", on: false, trigger: "start", delay: 60, message: { text: "", rows: [] } };
     auto.rules.push(r); openRules.add(r.id); renderAuto(); changed();
   });
+  // The chats the panel has but does not hand to addons, pasted as Telegram ids: sent in parts.
+  $("ids-text").addEventListener("input", () => {
+    const n = new Set($("ids-text").value.match(/\d{5,15}/g) || []).size;
+    $("ids-state").textContent = n ? "Найдено номеров: " + n : "";
+  });
+  $("ids-add").addEventListener("click", async () => {
+    const ids = [...new Set($("ids-text").value.match(/\d{5,15}/g) || [])].map(Number).filter((x) => x > 0);
+    if (!ids.length) { $("ids-state").textContent = "Номеров не нашлось."; return; }
+    $("ids-add").disabled = true;
+    let added = 0, last = null;
+    for (let i = 0; i < ids.length; i += 5000) {
+      $("ids-state").textContent = "Добавляю… " + Math.min(i + 5000, ids.length) + " из " + ids.length;
+      const r = await rpc("POST", "/chats/import", { ids: ids.slice(i, i + 5000) }, 60000, 2);
+      if (r.status !== 200) { $("ids-state").textContent = "Не добавилось: " + failText(r); $("ids-add").disabled = false; return; }
+      added += r.body.added; last = r.body;
+    }
+    $("ids-add").disabled = false;
+    $("ids-text").value = "";
+    $("ids-state").textContent = "Готово: новых " + added + ", всего бот знает " + last.total + " чатов.";
+    $("chats-count").textContent = "Бот знает " + last.total + " чатов" + (last.blocked ? ", из них " + last.blocked + " заблокировали бота" : "") + ".";
+    loadBroadcast();
+  });
   $("bc-when").addEventListener("change", () => { $("bc-at").hidden = $("bc-when").value !== "at"; drawStart(); });
   $("bc-start").addEventListener("click", startBroadcast);
   $("bc-refresh").addEventListener("click", loadBroadcast);

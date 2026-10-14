@@ -362,6 +362,30 @@ func rpc(w http.ResponseWriter, r *http.Request, d Deps) {
 		}
 		v, _ := broadcastStatus(r.Context(), d)
 		writeJSON(w, http.StatusOK, v)
+	case "POST /chats/import":
+		var in struct {
+			IDs []int64 `json:"ids"`
+		}
+		if !decodeBody(w, c.Body, &in) || d.Chats == nil {
+			return
+		}
+		if len(in.IDs) > maxImport {
+			writeJSON(w, http.StatusUnprocessableEntity, apiError{Code: "invalid", Message: "за один раз — не больше 10 000 номеров"})
+			return
+		}
+		if !d.Chats.Loaded() {
+			writeJSON(w, http.StatusServiceUnavailable, apiError{Code: "loading", Message: "список чатов ещё загружается из панели, попробуйте через минуту"})
+			return
+		}
+		added := d.Chats.Seed(in.IDs)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			d.Chats.Flush(ctx)
+		}()
+		total, blocked := d.Chats.Counts()
+		d.Log.Info("chats imported", "sent", len(in.IDs), "added", added, "total", total)
+		writeJSON(w, http.StatusOK, map[string]int{"added": added, "total": total, "blocked": blocked})
 	case "GET /export":
 		writeJSON(w, http.StatusOK, exportOf(d))
 	case "POST /import":
@@ -403,6 +427,9 @@ func rpc(w http.ResponseWriter, r *http.Request, d Deps) {
 		writeJSON(w, http.StatusNotFound, apiError{Code: "not_found", Message: c.Method + " " + c.Path})
 	}
 }
+
+// maxImport bounds one call of the chats' import; the page sends a long list in parts.
+const maxImport = 10000
 
 // bundle is everything the admin set on the page, to move to another panel or to keep: the
 // panel deletes an addon's store with the addon.

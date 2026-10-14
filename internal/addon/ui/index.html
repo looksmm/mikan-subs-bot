@@ -85,6 +85,17 @@
       </div>
     </section>
     <section>
+      <details id="import-chats">
+        <summary><h3>Добавить чаты списком</h3></summary>
+        <p class="hint">Бот запоминает каждого, кто ему пишет, начиная с установки, а подписчиков панели добавляет сам. Тех, кто запускал бота раньше, панель аддонам не отдаёт: их Telegram ID можно вставить сюда — по строке, через запятую или вперемешку с текстом, лишнее отбросится. Например, из базы панели: <span class="code">SELECT tg_id FROM tg_chats WHERE blocked = 0</span>.</p>
+        <textarea id="ids-text" rows="5" spellcheck="false" placeholder="123456789&#10;987654321&#10;…"></textarea>
+        <div class="row wrap gap-top">
+          <button type="button" id="ids-add" class="small-btn">Добавить</button>
+          <small id="ids-state" class="muted"></small>
+        </div>
+      </details>
+    </section>
+    <section>
       <h3>Кому</h3>
       <div class="audiences" id="audiences"></div>
       <h3 class="gap-top">Сообщение</h3>

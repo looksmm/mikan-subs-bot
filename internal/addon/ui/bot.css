@@ -106,14 +106,14 @@
 
 /* The preview: a chat bubble and its buttons, roughly as Telegram draws them. */
 .tg { display: flex; flex-direction: column; gap: 4px; max-width: 340px; }
-.tg-bubble { background: #ffffff; border: 1px solid var(--hairline); border-radius: 14px 14px 14px 4px; padding: 8px 11px; box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05); }
+.tg-bubble { background: var(--bubble); border: 1px solid var(--hairline); border-radius: 14px 14px 14px 4px; padding: 8px 11px; box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05); }
 .tg-photo { background: var(--code-bg); border-radius: 8px; padding: 22px; text-align: center; color: var(--muted); margin-bottom: 6px; font-size: 12px; }
 .tg-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 .tg-text .var { color: #3390ec; }
 .tg-text code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); border-radius: 4px; padding: 0 3px; }
 .tg-kb { display: flex; flex-direction: column; gap: 4px; }
 .tg-kb-row { display: flex; gap: 4px; }
-.tg-btn { flex: 1; text-align: center; font-size: 13px; font-weight: 600; padding: 7px 6px; border-radius: 9px; background: rgba(22, 26, 36, 0.32); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-btn { flex: 1; text-align: center; font-size: 13px; font-weight: 600; padding: 7px 6px; border-radius: 9px; background: var(--tg-btn); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tg-btn.primary { background: #3390ec; }
 .tg-btn.success { background: #31a24c; }
 .tg-btn.danger { background: #e53935; }

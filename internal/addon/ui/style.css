@@ -1,8 +1,10 @@
-/* The page sits in the admin panel's own card ("card glass"): no background of its own. The
-   colours are mikan's ink and status palette of its default (light) theme: the panel does not
-   tell a frame which theme it shows. */
+/* The page sits in the admin panel's own card ("card glass"): no background of its own, so the
+   panel's theme shows through. The colours are mikan's ink and status palette. The panel does not
+   tell a frame its theme, so the tone follows the device: "light dark" lets the browser draw the
+   frame transparent whenever it matches the admin's own scheme (a light page in a dark admin
+   gets an opaque white backdrop). */
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --text: #161a24;
   --muted: #5c6474;
   --hairline: rgba(22, 26, 36, 0.09);
@@ -18,6 +20,29 @@
   --bad-bg: #fce7e4;
   --code-bg: rgba(22, 26, 36, 0.06);
   --bar: rgba(255, 255, 255, 0.92);
+  --bubble: #ffffff;
+  --tg-btn: rgba(22, 26, 36, 0.32);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e7e9ed;
+    --muted: #a6adb8;
+    --hairline: rgba(255, 255, 255, 0.09);
+    --hover: rgba(255, 255, 255, 0.06);
+    --field: rgba(255, 255, 255, 0.05);
+    --fill: #e7e9ed;
+    --on-fill: #161a24;
+    --good: #73dca8;
+    --good-bg: #173326;
+    --warn: #ffd36b;
+    --warn-bg: #3a3018;
+    --bad: #ff7069;
+    --bad-bg: #3d2021;
+    --code-bg: rgba(255, 255, 255, 0.07);
+    --bar: rgba(20, 24, 32, 0.92);
+    --bubble: #1e2530;
+    --tg-btn: rgba(255, 255, 255, 0.14);
+  }
 }
 
 * { box-sizing: border-box; }

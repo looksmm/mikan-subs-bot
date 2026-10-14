@@ -64,3 +64,38 @@ func TestExportImport(t *testing.T) {
 		t.Fatalf("not ours: %d", code)
 	}
 }
+
+// The chats the panel does not hand to addons come in as a pasted list.
+func TestChatsImport(t *testing.T) {
+	_, srv := plustest.NewKV("p")
+	t.Cleanup(srv.Close)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	kv := plus.NewKV(srv.URL+"/panel/v2", "p", nil)
+	chats := plus.NewChats(kv, log, time.Now)
+	h := Handler(Deps{ID: "subs-bot", Token: "tok", Version: "test", Set: plus.NewStore(kv, log), Log: log, Chats: chats})
+	post := func(ids []int64) (int, map[string]any) {
+		rec := call(h, "tok", http.MethodPost, "/v2/ui/rpc", map[string]any{"method": "POST", "path": "/chats/import", "body": map[string]any{"ids": ids}})
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	// Not read from the panel yet: asked to wait, nothing is lost.
+	if code, _ := post([]int64{1}); code != http.StatusServiceUnavailable {
+		t.Fatalf("before load: %d", code)
+	}
+	if err := chats.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	chats.Seen(111, "Аня", true)
+	code, out := post([]int64{111, 222, 333, 333, -5, 0})
+	if code != http.StatusOK || out["added"] != 2.0 || out["total"] != 3.0 {
+		t.Fatalf("import: %d %v", code, out)
+	}
+	// An imported chat is an old one: no newcomers' messages for it.
+	if c, ok := chats.Get(222); !ok || c.First != 0 || c.Start {
+		t.Fatalf("imported: %+v", c)
+	}
+	if code, _ := post(make([]int64, maxImport+1)); code != http.StatusUnprocessableEntity {
+		t.Fatalf("too many: %d", code)
+	}
+}
