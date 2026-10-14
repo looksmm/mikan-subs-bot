@@ -336,10 +336,12 @@ window.X = (() => {
       const n = Math.max(0, Math.round(Number(dnum.value) || 0));
       r.delay = n * Number(dunit.value);
       dnum.classList.toggle("invalid", !/^\d+$/.test(dnum.value.trim()) || r.delay > 86400);
-      r.days = r.trigger === "expiring" ? Number(days.value) : 0;
-      r.first = r.trigger === "paid" && first.checked;
       const t = trig(r.trigger) || {};
-      r.replace = !!t.notice && replace.checked;
+      // Only what the trigger has: the addon keeps no empty fields, and a draft must look the same.
+      const put = (k, v) => { if (v) r[k] = v; else delete r[k]; };
+      put("days", r.trigger === "expiring" ? Number(days.value) : 0);
+      put("first", r.trigger === "paid" && first.checked);
+      put("replace", !!t.notice && replace.checked);
       thint.textContent = t.hint || "";
       daysF.hidden = r.trigger !== "expiring";
       firstF.hidden = r.trigger !== "paid";
@@ -474,9 +476,9 @@ window.X = (() => {
   // ---- the page's side: drafts, dirty, save ----
 
   const changed = () => onChange();
-  // norm is a draft as the addon keeps it: an empty field is no field, and the time of saving
-  // is the addon's.
-  const norm = (v) => JSON.stringify(v, (k, x) => (x === "" || x === null || k === "saved" ? undefined : x));
+  // norm is a draft as the addon keeps it: an empty, zero or false field is no field (the addon
+  // leaves those out), and the times of saving and of making a rule are the addon's.
+  const norm = (v) => JSON.stringify(v, (k, x) => (x === "" || x === null || x === false || x === 0 || k === "saved" || k === "created" ? undefined : x));
 
   function dirty() {
     return !!menu && (norm(menu) !== norm(menuSaved) || norm(auto) !== norm(autoSaved));

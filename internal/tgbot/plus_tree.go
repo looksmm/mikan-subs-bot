@@ -2,9 +2,12 @@ package tgbot
 
 import (
 	"context"
+	"errors"
 	"html"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"subsbot/internal/db"
 	"subsbot/internal/plus"
@@ -314,5 +317,66 @@ func (b *Bot) seen(up tgate.Update) {
 		b.x.e.Chats.Seen(up.Message.From.ID, up.Message.From.FirstName, start)
 	case up.CallbackQuery != nil:
 		b.x.e.Chats.Seen(up.CallbackQuery.From.ID, up.CallbackQuery.From.FirstName, false)
+	}
+}
+
+// AnswerAll stops the spinners of every press in a batch of updates at once, before any of
+// the batch is handled: a slow update ahead of a press must not keep its button spinning
+// until Telegram gives up on it.
+func (b *Bot) AnswerAll(ctx context.Context, ups []tgate.Update) {
+	for _, up := range ups {
+		if q := up.CallbackQuery; q != nil && q.Message != nil {
+			b.answer(ctx, q.ID)
+		}
+	}
+}
+
+// answerSet keeps the presses answered lately, so a press is answered once.
+type answerSet struct {
+	sync.Mutex
+	ids map[string]time.Time
+}
+
+// firstAnswer says whether id is not answered yet, and takes it. mikan's bot (no plus)
+// answers every time, as it did.
+func (b *Bot) firstAnswer(id string) bool {
+	if b.x == nil {
+		return true
+	}
+	a := &b.x.answered
+	a.Lock()
+	defer a.Unlock()
+	if a.ids == nil {
+		a.ids = map[string]time.Time{}
+	}
+	now := time.Now()
+	if _, ok := a.ids[id]; ok {
+		return false
+	}
+	a.ids[id] = now
+	if len(a.ids) > 2000 {
+		for k, at := range a.ids {
+			if now.Sub(at) > 5*time.Minute {
+				delete(a.ids, k)
+			}
+		}
+	}
+	return true
+}
+
+// answerNow answers a press; the way to Telegram failing, once more a moment later.
+func (b *Bot) answerNow(ctx context.Context, id string) {
+	err := b.d.Client.Answer(ctx, id, "")
+	var ae *tgate.APIError
+	if err != nil && !errors.As(err, &ae) && ctx.Err() == nil {
+		time.Sleep(500 * time.Millisecond)
+		err = b.d.Client.Answer(ctx, id, "")
+	}
+	if err != nil && ctx.Err() == nil {
+		if b.x != nil {
+			b.x.auto.warn(b.d.Log, "telegram: a press was not answered", "err", err)
+		} else {
+			b.d.Log.Warn("telegram: a press was not answered", "err", err)
+		}
 	}
 }

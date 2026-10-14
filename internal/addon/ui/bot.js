@@ -223,6 +223,18 @@
     const head = el("div", { class: "text-head" }, el("b", { text: t.title }), reset);
     const row = el("div", { class: "text-row", "data-search": (t.title + " " + (t.default || "") + " " + val).toLowerCase() }, head, input);
     if (t.vars) row.append(el("small", { class: "muted" }, "Переменные: ", el("span", { class: "code", text: t.vars })));
+    // Values the bot fills in (%s, %d): they may go by number, in any order, some left out.
+    const verbs = (t.default || "").match(/%[-+# 0-9.]*[a-zA-Z]/g) || [];
+    if (verbs.length && !tpl) {
+      const after = (t.title || "").split(": ").slice(1).join(": ");
+      const names = after ? after.split(", ").map((x) => x.replace(/^%[a-z]\s*—\s*/i, "")) : [];
+      const list = verbs.map((_, i) => "%" + (i + 1) + (names[i] ? " — " + names[i] : "")).join(", ");
+      const num = el("button", { type: "button", class: "small-btn", text: "Пронумеровать", onclick: () => {
+        let i = 0;
+        set((input.value || t.default || "").replace(/%%|%[-+# 0-9.]*[a-zA-Z]/g, (m) => (m === "%%" ? m : "%" + ++i)));
+      } });
+      row.append(el("small", { class: "muted" }, "Значения по номерам: " + list + ". Пишите %1, %2…, чтобы переставить их или убрать лишние; хотя бы одно оставьте. ", num));
+    }
     if (t.hint) row.append(el("small", { class: "muted", text: t.hint }));
     if (tpl) {
       row.append(el("div", { class: "row wrap" }, el("button", { type: "button", class: "small-btn", text: "Взять за основу вид mikan", onclick: () => set(t.base) })));

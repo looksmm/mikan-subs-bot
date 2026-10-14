@@ -55,6 +55,7 @@ func (b *treeBackend) Chat(context.Context, int64) (db.TgChat, error) {
 	return db.TgChat{MenuMsgID: b.menu.Load()}, nil
 }
 func (b *treeBackend) SetMenu(_ context.Context, _, msg int64) error { b.menu.Store(msg); return nil }
+func (*treeBackend) Context(context.Context, int64) (Account, error) { return Account{}, nil }
 func (b *treeBackend) User(_ context.Context, id int64) (db.User, error) {
 	if u, ok := b.users[id]; ok {
 		return u, nil
@@ -94,6 +95,8 @@ type fakeTelegram struct {
 	loseAfter int
 	// jitter: each answer waits up to this long, so the sends end out of order.
 	jitter time.Duration
+	// answers are the presses answered (answerCallbackQuery), by id.
+	answers map[string]int
 }
 
 func (f *fakeTelegram) setHolder(h bool) {
@@ -117,6 +120,15 @@ func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	if f.notHolder {
 		_, _ = w.Write([]byte(`{"ok":false,"error_code":401,"description":"Unauthorized"}`))
+		return
+	}
+	if path.Base(r.URL.Path) == "answerCallbackQuery" {
+		if f.answers == nil {
+			f.answers = map[string]int{}
+		}
+		id, _ := in["callback_query_id"].(string)
+		f.answers[id]++
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
 		return
 	}
 	if path.Base(r.URL.Path) == "getMe" {
@@ -672,5 +684,30 @@ func TestBroadcastWaitsForTheBot(t *testing.T) {
 	}
 	if len(got) != j.Total || j.Sent != j.Total || j.Failed != 0 {
 		t.Fatalf("after the pause: %d chats reached, job %+v", len(got), j)
+	}
+}
+
+// Every press of a batch is answered at once, and once, however long the rest takes.
+func TestPressesAreAnsweredOnce(t *testing.T) {
+	e := newExtras(t)
+	ctx := context.Background()
+	e.ex.Menu.Use(treeMenu())
+	press := func(n int, data string) tgate.Update {
+		return tgate.Update{UpdateID: int64(n), CallbackQuery: &tgate.CallbackQuery{ID: "q" + strconv.Itoa(n), From: tgate.User{ID: 7},
+			Data: data, Message: &tgate.Message{MessageID: 100, Chat: tgate.Chat{ID: 7, Type: "private"}}}}
+	}
+	ups := []tgate.Update{press(1, "k:help"), press(2, treeCode+":more:help"), press(3, freshCode+":m"), press(4, "ta:1:2")}
+	e.b.AnswerAll(ctx, ups)
+	e.wait("the answers", func() bool { e.tg.mu.Lock(); defer e.tg.mu.Unlock(); return len(e.tg.answers) == 4 })
+	for _, up := range ups[:3] {
+		e.b.Update(ctx, up)
+	}
+	time.Sleep(200 * time.Millisecond)
+	e.tg.mu.Lock()
+	defer e.tg.mu.Unlock()
+	for id, n := range e.tg.answers {
+		if n != 1 {
+			t.Errorf("press %s answered %d times", id, n)
+		}
 	}
 }

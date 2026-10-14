@@ -30,10 +30,25 @@ func main() {
 	refused := flag.Bool("refused", false, "show the banner of a look Telegram refused")
 	noUsers := flag.Bool("no-users-all", false, "the addon lacks the permission users:all")
 	flag.BoolVar(&notHolder, "not-holder", false, "the bot is another addon's")
+	seed := flag.String("kv", "", "a JSON file of store values to start with: {\"settings\": {...}, \"menu\": {...}}")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	kv, kvSrv := plustest.NewKV("p")
 	kvSrv.Close()
+	if *seed != "" {
+		var vals map[string]json.RawMessage
+		b, err := os.ReadFile(*seed)
+		if err == nil {
+			err = json.Unmarshal(b, &vals)
+		}
+		if err != nil {
+			log.Error("seed", "err", err)
+			os.Exit(2)
+		}
+		for k, v := range vals {
+			kv.Set(k, v)
+		}
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/panel/v2/kv", kv)
 	mux.Handle("/panel/v2/kv/", kv)

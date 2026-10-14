@@ -147,6 +147,7 @@ func (a *addon) updates(ctx context.Context) {
 			a.bot.Started(ctx)
 		}
 		backoff = time.Second
+		a.bot.AnswerAll(ctx, ups) // plus: every press's spinner stops now, not in its turn
 		for _, up := range ups {
 			a.bot.Update(ctx, up)
 			offset = up.UpdateID + 1

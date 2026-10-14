@@ -147,9 +147,13 @@ func (b *Bot) tidy(chat, msg int64) {
 }
 
 // answer stops the spinner on a pressed button. A call to Telegram that hangs must not
-// hold up the update loop, so it goes on its own.
+// hold up the update loop, so it goes on its own. plus: once per press (AnswerAll may have
+// answered it already), again once when the way to Telegram failed, and a refusal is logged.
 func (b *Bot) answer(ctx context.Context, id string) {
-	b.d.Go(func() { _ = b.d.Client.Answer(ctx, id, "") })
+	if !b.firstAnswer(id) {
+		return
+	}
+	b.d.Go(func() { b.answerNow(ctx, id) })
 }
 
 // onPress edits the menu message in place: the chat never fills up with menus. The

@@ -41,6 +41,8 @@ type ext struct {
 	auto autoState
 	// bc: the broadcasts' runner (plus_bcast.go).
 	bc bcast
+	// answered: the presses answered lately (plus_tree.go).
+	answered answerSet
 }
 
 // Plus turns on the bot's additions: the look comes from set. It dresses the bot's

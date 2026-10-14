@@ -2,6 +2,7 @@ package tgbot
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -101,6 +102,43 @@ func TestTextEntries(t *testing.T) {
 	for _, k := range []string{"welcome", "main", "renew", "expiring", "expired", "traffic90", "trafficEnd"} {
 		if slices.ContainsFunc(es, func(e plus.TextEntry) bool { return e.Key == k }) {
 			t.Errorf("%s is the panel's text", k)
+		}
+	}
+}
+
+// Values by number: in any order, some left out — the refund message without the tariff.
+func TestNumberedTexts(t *testing.T) {
+	text := "↩️ Продление «%2» отменено, деньги вернутся. Новый срок: %3. 100%% честно."
+	withTexts(t, map[string]string{"refundedRenew": text})
+	w := wordsFor("ru")
+	got := fmt.Sprintf(w.refundedRenew, "Стандарт", "Мой VPN", "1 ноября")
+	if got != "↩️ Продление «Мой VPN» отменено, деньги вернутся. Новый срок: 1 ноября. 100% честно." {
+		t.Fatalf("numbered: %q", got)
+	}
+	// The order as the built-in's still works as it did.
+	withTexts(t, map[string]string{"refundedRenew": "Возврат: %s, %s, %s"})
+	if got := fmt.Sprintf(wordsFor("ru").refundedRenew, "a", "b", "c"); got != "Возврат: a, b, c" {
+		t.Fatalf("in order: %q", got)
+	}
+	for _, c := range []struct {
+		name, text string
+		ok         bool
+	}{
+		{"numbered", text, true},
+		{"one kept", "Окончание: %3", true},
+		{"twice", "%2 и снова %2", true},
+		{"a number past the values", "Окончание: %4", false},
+		{"numbers and %s together", "%1 и %s", false},
+		{"one dropped without numbers", "Возврат: %s, %s", false},
+		{"numbers where nothing is filled in", "Назад %1", false},
+	} {
+		key := "refundedRenew"
+		if c.name == "numbers where nothing is filled in" {
+			key = "back"
+		}
+		err := CheckTexts(&plus.Settings{Texts: map[string]string{key: c.text}})
+		if (err == nil) != c.ok {
+			t.Errorf("%s: %v", c.name, err)
 		}
 	}
 }
